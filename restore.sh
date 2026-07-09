@@ -449,8 +449,52 @@ restore_label() {
         dest="${HOME}/${relpath}"
         dry "mkdir -p \"$(dirname "${dest}")\" && rsync -a --backup \"${sub}\" \"${dest}/\""
       done ;;
+    shell-dots)
+      for f in "${src}"/*; do
+        [ -f "${f}" ] || continue
+        dry "cp -a --backup \"${f}\" \"${HOME}/$(basename "${f}")\""
+      done ;;
+    kde-theme)
+      # Restore sub-dirs and individual files
+      for sub in "${src}"/*/; do
+        [ -d "${sub}" ] || continue
+        relpath="$(restore_map_path "${label}" "${sub}")"
+        [ -n "${relpath}" ] && dry "mkdir -p \"${HOME}/${relpath}\" && rsync -a --backup \"${sub}\" \"${HOME}/${relpath}/\""
+      done
+      for f in "${src}"/*.rc "${src}"/kdeglobals "${src}"/kwinrc                "${src}"/kglobalshortcutsrc                "${src}"/plasma-org.kde.plasma.desktop-appletsrc; do
+        [ -f "${f}" ] || continue
+        dry "cp -a --backup \"${f}\" \"${HOME}/.config/$(basename "${f}")\""
+      done ;;
+    git-config)
+      for sub in "${src}"/*/; do
+        [ -d "${sub}" ] || continue
+        relpath="$(restore_map_path "${label}" "${sub}")"
+        [ -n "${relpath}" ] && dry "mkdir -p \"${HOME}/${relpath}\" && rsync -a --backup \"${sub}\" \"${HOME}/${relpath}/\""
+      done ;;
     *)
-      log "  no restore logic for label '${label}'"
+      # Generic sync_one labels: each sub-dir is a mangled absolute path.
+      # Restore using restore_map_path to unmangle back to $HOME.
+      for sub in "${src}"/*/; do
+        [ -d "${sub}" ] || continue
+        relpath="$(restore_map_path "${label}" "${sub}")"
+        if [ -n "${relpath}" ]; then
+          dest="${HOME}/${relpath}"
+          dry "mkdir -p \"$(dirname \"${dest}\")\" && rsync -a --backup \"${sub}\" \"${dest}/\""
+        else
+          log "    (no restore rule for ${label}/$(basename "${sub}") — skipped)"
+        fi
+      done
+      # Also restore individual files at label root (e.g. libinput-gestures.conf)
+      for f in "${src}"/*; do
+        [ -f "${f}" ] || continue
+        fname="$(basename "${f}")"
+        case "${label}:${fname}" in
+          input-remapper:libinput-gestures.conf)
+            dry "cp -a --backup \"${f}\" \"${HOME}/.config/${fname}\"" ;;
+          desktop-entries:mimeapps.list)
+            dry "cp -a --backup \"${f}\" \"${HOME}/.config/${fname}\"" ;;
+        esac
+      done
       ;;
   esac
 }
@@ -812,12 +856,31 @@ declare -A label_friendly_name=(
   ["mempalace"]="MemPalace (memory palace — live SQLite + chromadb/HNSW + WAL)"
   ["tailscale"]="Tailscale (mesh VPN — status snapshot only, manual re-auth required)"
   ["packages"]="Package list"
+  ["shell-dots"]="Shell dotfiles (.bashrc, .profile)"
+  ["hyprland"]="Hyprland config"
+  ["illogical-impulse"]="illogical-impulse (theming framework)"
+  ["matugen-colors"]="Matugen + color schemes"
+  ["kde-theme"]="KDE theming bundle (Kvantum, kwinrc, shortcuts)"
+  ["gtk-theme"]="GTK 3.0 + 4.0"
+  ["desktop-entries"]="Custom .desktop files + MIME handlers"
+  ["git-config"]="Git config + gh CLI auth"
+  ["mpv"]="mpv player config"
+  ["mangohud"]="MangoHud overlay"
+  ["gaming-overlays"]="Gamescope / vkBasalt / cava"
+  ["input-remapper"]="Input remapper + libinput gestures"
+  ["fonts"]="Custom fonts"
+  ["audio-config"]="PulseAudio / PipeWire config"
+  ["klipper"]="Klipper (clipboard history)"
+  ["yubico"]="Yubico / YubiKey configs"
 )
 
 for label in hermes hermes-ui chromium zen dms telegram discord spotify \
              inav kdeconnect claude antigravity cursor konsole heroic steam \
              system system-root secrets extras-gemini extras-codex extras-agents \
-             mempalace tailscale packages; do
+             mempalace tailscale \
+             shell-dots hyprland illogical-impulse matugen-colors kde-theme \
+             gtk-theme desktop-entries git-config mpv mangohud gaming-overlays \
+             input-remapper fonts audio-config klipper yubico packages; do
   if [ -d "${BACKUP}/${label}" ] && should_run "${label}"; then
     log ""
     log "============================================================"

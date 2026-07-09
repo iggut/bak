@@ -94,6 +94,7 @@ CATEGORIES=(
   "system-secrets:System & Secrets:on:ssh + gnupg + NM + VPN + /etc + ~/.secrets"
   "memory-network:Memory & Network:on:MemPalace (live SQLite) + Tailscale status"
   "agents-extras:Agent extras:on:Gemini/Codex/Claude/ECC plugin configs"
+  "desktop-shell:Desktop & Shell Config:off:Shell dotfiles, Hyprland, theming, fonts, YubiKey, etc."
   "packages:Packages:on:Re-install pacman + AUR list"
 )
 
@@ -108,6 +109,7 @@ declare -A CATEGORY_LABELS=(
   ["system-secrets"]="system system-root secrets"
   ["memory-network"]="mempalace tailscale"
   ["agents-extras"]="extras-gemini extras-codex extras-agents"
+  ["desktop-shell"]="shell-dots hyprland illogical-impulse matugen-colors kde-theme gtk-theme desktop-entries git-config mpv mangohud gaming-overlays input-remapper fonts audio-config klipper yubico"
   ["packages"]="packages"
 )
 
@@ -138,6 +140,22 @@ declare -A LABEL_NAME=(
   ["mempalace"]="MemPalace"
   ["tailscale"]="Tailscale (needs re-auth)"
   ["packages"]="Package list (reinstall)"
+  ["shell-dots"]="Shell dotfiles (.bashrc, .profile)"
+  ["hyprland"]="Hyprland config"
+  ["illogical-impulse"]="illogical-impulse (theming)"
+  ["matugen-colors"]="Matugen + color schemes"
+  ["kde-theme"]="KDE theming bundle"
+  ["gtk-theme"]="GTK 3.0 + 4.0"
+  ["desktop-entries"]="Custom .desktop + MIME"
+  ["git-config"]="Git config + gh CLI"
+  ["mpv"]="mpv player"
+  ["mangohud"]="MangoHud overlay"
+  ["gaming-overlays"]="Gamescope / vkBasalt / cava"
+  ["input-remapper"]="Input remapper + gestures"
+  ["fonts"]="Custom fonts"
+  ["audio-config"]="PulseAudio / PipeWire"
+  ["klipper"]="Klipper (clipboard history)"
+  ["yubico"]="Yubico / YubiKey"
 )
 
 # Stage 1 — backup picker.

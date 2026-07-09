@@ -967,6 +967,109 @@ do_agent_dir() {
 # Snapshot installed packages so restore.sh knows what to install
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Desktop & Shell configuration — 16 individually-restorable labels.
+# Each label is its own top-level directory so the restore GUI can offer
+# them as independent checkboxes under the "Desktop & Shell Config" category.
+# ---------------------------------------------------------------------------
+
+backup_desktop_config() {
+  banner "Desktop & Shell Configuration (16 labels)"
+
+  # 1. Shell dotfiles — individual files, not sync_one
+  mkdir -p "${TS_DIR}/shell-dots"
+  for f in .bashrc .bash_profile .profile .bash_aliases .p10k.zsh; do
+    [ -f "${HOME}/${f}" ] && cp -a "${HOME}/${f}" "${TS_DIR}/shell-dots/" 2>>"${LOG}"
+  done
+  log "  -> shell dotfiles"
+  hash_label shell-dots
+
+  # 2. Hyprland config
+  sync_one hyprland ~/.config/hypr
+  hash_label hyprland
+
+  # 3. illogical-impulse (theming framework)
+  sync_one illogical-impulse ~/.config/illogical-impulse
+  hash_label illogical-impulse
+
+  # 4. Matugen + KDE color schemes
+  sync_one matugen-colors ~/.config/matugen
+  sync_one matugen-colors ~/.local/share/color-schemes
+  hash_label matugen-colors
+
+  # 5. KDE theming bundle — mix of files and dirs
+  mkdir -p "${TS_DIR}/kde-theme"
+  [ -d ~/.config/Kvantum ] && \
+    rsync -a ~/.config/Kvantum/ "${TS_DIR}/kde-theme/Kvantum/" 2>>"${LOG}"
+  [ -d ~/.config/wal ] && \
+    rsync -a ~/.config/wal/ "${TS_DIR}/kde-theme/wal/" 2>>"${LOG}"
+  [ -d ~/.config/kdedefaults ] && \
+    rsync -a ~/.config/kdedefaults/ "${TS_DIR}/kde-theme/kdedefaults/" 2>>"${LOG}"
+  for f in kdeglobals kwinrc kglobalshortcutsrc \
+           plasma-org.kde.plasma.desktop-appletsrc; do
+    [ -f ~/.config/"${f}" ] && \
+      cp -a ~/.config/"${f}" "${TS_DIR}/kde-theme/" 2>>"${LOG}"
+  done
+  log "  -> KDE theming bundle"
+  hash_label kde-theme
+
+  # 6. GTK 3.0 + 4.0
+  sync_one gtk-theme ~/.config/gtk-3.0
+  sync_one gtk-theme ~/.config/gtk-4.0
+  hash_label gtk-theme
+
+  # 7. Custom .desktop files + mimeapps.list
+  mkdir -p "${TS_DIR}/desktop-entries"
+  sync_one desktop-entries ~/.local/share/applications
+  [ -f ~/.config/mimeapps.list ] && \
+    cp -a ~/.config/mimeapps.list "${TS_DIR}/desktop-entries/" 2>>"${LOG}"
+  hash_label desktop-entries
+
+  # 8. Git config + gh CLI auth
+  sync_one git-config ~/.config/git
+  sync_one git-config ~/.config/gh
+  hash_label git-config
+
+  # 9. mpv player config
+  sync_one mpv ~/.config/mpv
+  hash_label mpv
+
+  # 10. MangoHud overlay
+  sync_one mangohud ~/.config/MangoHud
+  hash_label mangohud
+
+  # 11. Gamescope / vkBasalt / cava
+  sync_one gaming-overlays ~/.config/gamescope
+  sync_one gaming-overlays ~/.config/vkBasalt
+  sync_one gaming-overlays ~/.config/cava
+  hash_label gaming-overlays
+
+  # 12. Input remapper + libinput-gestures
+  sync_one input-remapper ~/.config/input-remapper-2
+  mkdir -p "${TS_DIR}/input-remapper"
+  [ -f ~/.config/libinput-gestures.conf ] && \
+    cp -a ~/.config/libinput-gestures.conf "${TS_DIR}/input-remapper/" 2>>"${LOG}"
+  hash_label input-remapper
+
+  # 13. Custom fonts
+  sync_one fonts ~/.local/share/fonts
+  hash_label fonts
+
+  # 14. PulseAudio / PipeWire config
+  sync_one audio-config ~/.config/pulse
+  hash_label audio-config
+
+  # 15. Klipper (clipboard history)
+  sync_one klipper ~/.local/share/klipper
+  hash_label klipper
+
+  # 16. Yubico / YubiKey configs
+  sync_one yubico ~/.config/Yubico
+  sync_one yubico ~/.local/share/ykman
+  sync_one yubico ~/.local/share/com.yubico.yubioath
+  hash_label yubico
+}
+
 backup_package_state() {
   banner "Package state"
   mkdir -p "${TS_DIR}/packages"
@@ -1065,6 +1168,7 @@ backup_secrets
 backup_gemini_codex
 backup_mempalace
 backup_tailscale
+backup_desktop_config
 backup_package_state
 
 emit_manifest
