@@ -995,7 +995,9 @@ class BakupWindow(Gtk.Window):
                     f"{label} … ({self._progress_done}/{self._progress_total})"
                 )
             elif status == "done":
-                self._progress_done += 1
+                # Pre-install phase is not part of the selected-item count.
+                if label != "install-apps":
+                    self._progress_done += 1
                 frac = min(self._progress_done / self._progress_total, 1.0)
                 self.progress.set_fraction(frac)
                 self.progress.set_text(

@@ -43,6 +43,8 @@ This workspace directory is often also the **live backup destination**. Snapshot
 | `--list-labels` | both | Print `ALL_LABELS` |
 | `--list-parts` | restore | JSON via `lib/restore_parts.py` |
 
+Restore always runs a **pre-install** pass (`ensure_apps_installed` in `restore.sh`) for selected labels before copying files: missing pacman/AUR packages (and pip for `mempalace`) are installed first. Package name maps live in `install_pkgs_for_label` / `pkgs_for_label`.
+
 There is no `BACKUP_ROOT` env var — restore uses `BACKUP_DEST` internally as `BACKUP_ROOT`.
 
 ## How to verify changes

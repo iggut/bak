@@ -94,6 +94,12 @@ snapshots used mangled directory names; restore still supports both.
 logic covers telegram, steam, secrets, packages, mempalace, tailscale, and
 privileged system paths.
 
+Before any files are copied, restore detects missing packages for the selected
+labels (via `pacman -Q`) and installs them in one batch with `pacman` /
+`paru`/`yay`. Settings-only labels (shell dots, themes, …) skip install.
+Selecting the `packages` label reinstalls from the snapshot’s explicit /
+AUR package lists first.
+
 The GTK GUI (`./bakup-gui`) provides backup label selection and an expandable
 restore tree of **parts** with an editable **Restore to** column.
 

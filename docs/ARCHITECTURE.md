@@ -55,7 +55,16 @@ Special cases:
 - `tailscale` stores status/env snapshots; node key is **not** backed up — re-auth is manual.
 - `packages` stores pacman/paru package lists for reinstall on restore.
 
-## Partial restore (“parts”)
+## Restore pre-install
+
+`restore.sh` runs `ensure_apps_installed` once before any file restore:
+
+1. Collect labels from `--apps` / `--parts` (or all present labels).
+2. If `packages` is selected → install snapshot `pacman-explicit.txt` + `paru-foreign.txt`.
+3. For each other label → resolve packages via `pkgs_for_label` / `install_pkgs_for_label`, skip already-installed (`pacman -Q`), install the rest in one `pacman`/`paru` batch (plus pipx/pip for `mempalace`).
+4. Then restore files / parts as usual.
+
+Settings-only labels (themes, shell dots, secrets, …) have no package mapping.
 
 `lib/restore_parts.py` discovers **parts** inside a snapshot. Part IDs are `label/part` (e.g. `zen/bookmarks`).
 

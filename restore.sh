@@ -15,8 +15,9 @@
 #   restore.sh --list-parts [SNAPSHOT]         # JSON of partial restore parts
 #
 # Behaviour:
-#   * For each app found in <BACKUP>/<app>/ exists:
-#       1. If the app's main binary is missing, install via pacman/paru.
+#   * For each selected app/label found in <BACKUP>/<app>/:
+#       1. Detect missing packages (pacman -Q) and install them all via
+#          pacman/paru *before* any file restore (see ensure_apps_installed).
 #       2. Restore config / tokens / keys from the backup onto $HOME.
 #   * Modern snapshots store HOME trees under <label>/home/<relpath>.
 #   * Preserves any existing config (rsync --backup with timestamp suffix).
@@ -331,9 +332,13 @@ restore_part() {
   local override="" pair src dest
   override="$(map_dest_for "${part_id}" || true)"
 
-  # packages/* parts: reinstall from list files rather than copying.
+  # packages/* parts: reinstall from list files (unless pre-install already did).
   case "${part_id}" in
     packages/pacman-explicit|packages/paru-foreign)
+      if [ "${PACKAGE_LISTS_DONE}" = "1" ]; then
+        log "  (package lists already applied in pre-install phase)"
+        return 0
+      fi
       local list
       list="$(python3 "${PARTS_PY}" resolve "${BACKUP}" "${part_id}" \
         ${override:+--dest "${override}"} | awk -F'\t' 'NR==1{print $1}')"
@@ -513,19 +518,10 @@ restore_label() {
       dry "rsync -a --backup --suffix=.bak-$(date +%Y%m%d-%H%M%S) \"${src}/\" \"${HOME}/.hermes/\""
       ;;
     packages)
-      if [ -f "${src}/pacman-explicit.txt" ]; then
-        log "  install pacman-explicit.txt"
-        if [ "${DRY_RUN}" -eq 1 ]; then
-          echo "[dry-run] sudo pacman -S --needed --noconfirm < ${src}/pacman-explicit.txt"
-        else
-          # shellcheck disable=SC2046
-          sudo_run pacman -S --needed --noconfirm $(tr '\n' ' ' < "${src}/pacman-explicit.txt") || \
-            log "  pacman-explicit install had failures"
-        fi
-      fi
-      if [ -f "${src}/paru-foreign.txt" ] && [ -n "${aur_helper}" ]; then
-        log "  install paru-foreign.txt via ${aur_helper}"
-        dry "xargs -a \"${src}/paru-foreign.txt\" ${aur_helper} -S --needed --noconfirm"
+      if [ "${PACKAGE_LISTS_DONE}" = "1" ]; then
+        log "  (package lists already applied in pre-install phase)"
+      else
+        install_package_lists
       fi
       ;;
     tailscale)
@@ -767,8 +763,10 @@ should_run() {
   case ",${APP_FILTER}," in *",${1},"*) return 0 ;; *) return 1 ;; esac
 }
 
+# Default pacman/AUR packages for curated labels. Empty = settings-only
+# (nothing to install) or handled specially (packages lists, pip).
 declare -A install_pkgs_for_label=(
-  ["chrome"]="chromium"
+  ["chromium"]="chromium"
   ["zen"]="zen-browser-bin"
   ["telegram"]="telegram-desktop"
   ["discord"]="discord"
@@ -781,14 +779,86 @@ declare -A install_pkgs_for_label=(
   ["cursor"]="cursor-bin"
   ["konsole"]="konsole"
   ["antigravity"]="antigravity-ide-bin"
-  ["chromium"]="chromium"
-  ["mempalace"]=""
   ["tailscale"]="tailscale"
+  ["mpv"]="mpv"
+  ["mangohud"]="mangohud"
+  ["input-remapper"]="input-remapper"
+  ["nvim"]="neovim"
+  ["firefox"]="firefox"
+  ["keepassxc"]="keepassxc"
+  ["paru"]="paru"
+  ["git-config"]="git github-cli"
+  ["yubico"]="yubikey-manager"
+  ["matugen-colors"]="matugen-bin"
 )
 
 declare -A install_pip_pkgs_for_label=(
   ["mempalace"]="mempalace"
 )
+
+# True if backup has a modern home/ tree entry for this relative path.
+_backup_has_home_path() {
+  local label="$1" rel="$2"
+  local base="${BACKUP}/${label}"
+  if [ -e "${base}/home/${rel}" ] || [ -e "${base}/home/${rel#./}" ]; then
+    return 0
+  fi
+  return 1
+}
+
+# Resolve packages to install for a label, preferring only apps that appear
+# in the snapshot (e.g. don't install every terminal emulator).
+pkgs_for_label() {
+  local label="$1"
+  local pkgs=()
+
+  case "${label}" in
+    packages|system|system-root|secrets|shell-dots|kde-theme|gtk-theme|\
+    desktop-entries|fonts|audio-config|klipper|hermes|hermes-ui|dms|\
+    extras-gemini|extras-codex|extras-agents|illogical-impulse|mempalace)
+      # Settings-only, pip-only, or package-list label — no default pkgs here.
+      printf ''
+      return 0
+      ;;
+    terminals)
+      _backup_has_home_path terminals ".config/alacritty" && pkgs+=(alacritty)
+      _backup_has_home_path terminals ".config/kitty" && pkgs+=(kitty)
+      _backup_has_home_path terminals ".config/foot" && pkgs+=(foot)
+      _backup_has_home_path terminals ".config/ghostty" && pkgs+=(ghostty)
+      _backup_has_home_path terminals ".config/wezterm" && pkgs+=(wezterm)
+      # If snapshot has no recognizable trees, fall back to nothing (config-only restore).
+      printf '%s' "${pkgs[*]}"
+      return 0
+      ;;
+    hyprland)
+      pkgs+=(hyprland)
+      _backup_has_home_path hyprland ".config/waybar" && pkgs+=(waybar)
+      _backup_has_home_path hyprland ".config/wlogout" && pkgs+=(wlogout)
+      _backup_has_home_path hyprland ".config/wofi" && pkgs+=(wofi)
+      _backup_has_home_path hyprland ".config/rofi" && pkgs+=(rofi)
+      _backup_has_home_path hyprland ".config/fuzzel" && pkgs+=(fuzzel)
+      printf '%s' "${pkgs[*]}"
+      return 0
+      ;;
+    gaming-overlays)
+      _backup_has_home_path gaming-overlays ".config/vkBasalt" && pkgs+=(vkbasalt)
+      _backup_has_home_path gaming-overlays ".config/gamescope" && pkgs+=(gamescope)
+      _backup_has_home_path gaming-overlays ".config/cava" && pkgs+=(cava)
+      _backup_has_home_path gaming-overlays ".config/goverlay" && pkgs+=(goverlay)
+      printf '%s' "${pkgs[*]}"
+      return 0
+      ;;
+    vscode)
+      # Arch/Chaotic typically ship `code` (MS) or `code-oss`.
+      printf '%s' "code"
+      return 0
+      ;;
+    *)
+      printf '%s' "${install_pkgs_for_label[$label]:-}"
+      return 0
+      ;;
+  esac
+}
 
 install_pip_pkg() {
   local pkg="$1"
@@ -821,6 +891,93 @@ install_pip_pkg() {
   else
     log "  (already installed) pip: $pkg"
   fi
+}
+
+# Install package lists from the packages/ label (pacman explicit + AUR foreign).
+install_package_lists() {
+  local src="${BACKUP}/packages"
+  [ -d "${src}" ] || return 0
+  if [ -f "${src}/pacman-explicit.txt" ]; then
+    log "  install packages/pacman-explicit.txt"
+    if [ "${DRY_RUN}" -eq 1 ]; then
+      echo "[dry-run] sudo pacman -S --needed --noconfirm < ${src}/pacman-explicit.txt"
+    else
+      # shellcheck disable=SC2046
+      sudo_run pacman -S --needed --noconfirm $(tr '\n' ' ' < "${src}/pacman-explicit.txt") || \
+        log "  pacman-explicit install had failures"
+    fi
+  fi
+  if [ -f "${src}/paru-foreign.txt" ] && [ -n "${aur_helper}" ]; then
+    log "  install packages/paru-foreign.txt via ${aur_helper}"
+    dry "xargs -a \"${src}/paru-foreign.txt\" ${aur_helper} -S --needed --noconfirm"
+  elif [ -f "${src}/paru-foreign.txt" ]; then
+    log "  (no AUR helper — skip paru-foreign.txt)"
+  fi
+  PACKAGE_LISTS_DONE=1
+}
+
+# Before any file restore: detect missing packages for selected labels and
+# install them in one batch (plus optional full package lists).
+PACKAGE_LISTS_DONE=0
+ensure_apps_installed() {
+  local -a labels=("$@")
+  local label pkgs pip_pkgs
+  local -a all_pkgs=()
+  local -A seen_pkg=()
+  local -a need_pip=()
+  local want_package_lists=0
+  local p
+
+  log ""
+  log "============================================================"
+  log " Detect / install apps for selected restore targets"
+  log "============================================================"
+  progress "install-apps" start
+
+  for label in "${labels[@]}"; do
+    [ -z "${label}" ] && continue
+    if [ "${label}" = "packages" ]; then
+      want_package_lists=1
+      continue
+    fi
+    [ -d "${BACKUP}/${label}" ] || continue
+
+    pkgs="$(pkgs_for_label "${label}")"
+    if [ -n "${pkgs}" ]; then
+      log "  ${label}: need packages → ${pkgs}"
+      for p in ${pkgs}; do
+        if [ -z "${seen_pkg[$p]:-}" ]; then
+          seen_pkg[$p]=1
+          all_pkgs+=("${p}")
+        fi
+      done
+    else
+      log "  ${label}: no package mapping (settings-only or pip)"
+    fi
+    pip_pkgs="${install_pip_pkgs_for_label[$label]:-}"
+    if [ -n "${pip_pkgs}" ]; then
+      need_pip+=("${pip_pkgs}")
+    fi
+  done
+
+  if [ "${want_package_lists}" -eq 1 ]; then
+    log "  packages: reinstall from snapshot package lists"
+    install_package_lists
+  fi
+
+  if [ ${#all_pkgs[@]} -gt 0 ]; then
+    log "  installing missing packages (${#all_pkgs[@]} unique)…"
+    install_pkgs "${all_pkgs[*]}"
+  else
+    log "  (no per-label packages to install)"
+  fi
+
+  for pip_pkgs in "${need_pip[@]+"${need_pip[@]}"}"; do
+    [ -n "${pip_pkgs}" ] && install_pip_pkg "${pip_pkgs}"
+  done
+
+  progress "install-apps" done
+  log ""
 }
 
 declare -A label_friendly_name=(
@@ -862,9 +1019,8 @@ log " parts     : ${PARTS_FILTER:-<full labels>}"
 log " aur-helper: ${aur_helper:-none found}"
 log ""
 
-# Order matters: restore the package list FIRST so that binaries exist when
-# individual app-restoration needs to invoke them.  Some apps don't need
-# install (e.g. KDE connect pieces, Hermes UI is a pip pkg).
+# Install missing apps for every selected label *before* any file restore.
+# Settings-only labels are skipped; `packages` reinstalls from snapshot lists.
 
 if [ -n "${PARTS_FILTER}" ]; then
   # Partial restore mode: only the selected parts (with optional dest overrides).
@@ -873,29 +1029,29 @@ if [ -n "${PARTS_FILTER}" ]; then
     exit 1
   fi
   IFS=',' read -ra _parts_arr <<< "${PARTS_FILTER}"
-  # Optional package install for labels touched by parts (skip packages/* itself).
   declare -A _labels_seen=()
-  for part_id in "${_parts_arr[@]}"; do
-    part_id="${part_id## }"
-    part_id="${part_id%% }"
-    [ -z "${part_id}" ] && continue
-    label="${part_id%%/*}"
-    if [ -z "${_labels_seen[$label]:-}" ]; then
-      _labels_seen[$label]=1
-      if [ -d "${BACKUP}/${label}" ]; then
-        pkgs="${install_pkgs_for_label[$label]:-}"
-        [ -n "${pkgs}" ] && install_pkgs "${pkgs}"
-        pip_pkgs="${install_pip_pkgs_for_label[$label]:-}"
-        [ -n "${pip_pkgs}" ] && install_pip_pkg "${pip_pkgs}"
-      fi
-    fi
-  done
+  _pre_labels=()
   for part_id in "${_parts_arr[@]}"; do
     part_id="${part_id## }"
     part_id="${part_id%% }"
     [ -z "${part_id}" ] && continue
     label="${part_id%%/*}"
     # Honour --apps as an additional filter when both are set.
+    if [ -n "${APP_FILTER}" ] && ! should_run "${label}"; then
+      continue
+    fi
+    if [ -z "${_labels_seen[$label]:-}" ]; then
+      _labels_seen[$label]=1
+      _pre_labels+=("${label}")
+    fi
+  done
+  ensure_apps_installed "${_pre_labels[@]}"
+
+  for part_id in "${_parts_arr[@]}"; do
+    part_id="${part_id## }"
+    part_id="${part_id%% }"
+    [ -z "${part_id}" ] && continue
+    label="${part_id%%/*}"
     if [ -n "${APP_FILTER}" ] && ! should_run "${label}"; then
       log "  (skip part ${part_id} — label filtered by --apps)"
       continue
@@ -909,26 +1065,41 @@ if [ -n "${PARTS_FILTER}" ]; then
     progress "${part_id}" done
   done
 else
-  if should_run packages; then
-    log "[0/15] packages"
-    install_pkgs "$(cat "${BACKUP}/packages/pacman-explicit.txt" 2>/dev/null || true)"
-  fi
-
+  _pre_labels=()
   for label in "${ALL_LABELS[@]}"; do
     if [ -d "${BACKUP}/${label}" ] && should_run "${label}"; then
-      log ""
-      log "============================================================"
-      log " ${label_friendly_name[$label]:-$label}"
-      log "============================================================"
-      log " backup at : ${BACKUP}/${label}"
-      progress "${label}" start
-      pkgs="${install_pkgs_for_label[$label]:-}"
-      [ -n "${pkgs}" ] && install_pkgs "${pkgs}"
-      pip_pkgs="${install_pip_pkgs_for_label[$label]:-}"
-      [ -n "${pip_pkgs}" ] && install_pip_pkg "${pip_pkgs}"
-      restore_label "${label}"
-      progress "${label}" done
+      _pre_labels+=("${label}")
     fi
+  done
+  # --apps may also name dynamic cfg-* labels from the GUI discovery scan.
+  if [ -n "${APP_FILTER}" ]; then
+    IFS=',' read -ra _app_arr <<< "${APP_FILTER}"
+    for label in "${_app_arr[@]}"; do
+      label="${label## }"
+      label="${label%% }"
+      [ -z "${label}" ] && continue
+      [ -d "${BACKUP}/${label}" ] || continue
+      _found=0
+      for _l in "${_pre_labels[@]+"${_pre_labels[@]}"}"; do
+        [ "${_l}" = "${label}" ] && _found=1 && break
+      done
+      if [ "${_found}" -eq 0 ]; then
+        _pre_labels+=("${label}")
+      fi
+    done
+  fi
+
+  ensure_apps_installed "${_pre_labels[@]}"
+
+  for label in "${_pre_labels[@]+"${_pre_labels[@]}"}"; do
+    log ""
+    log "============================================================"
+    log " ${label_friendly_name[$label]:-$label}"
+    log "============================================================"
+    log " backup at : ${BACKUP}/${label}"
+    progress "${label}" start
+    restore_label "${label}"
+    progress "${label}" done
   done
 fi
 
