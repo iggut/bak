@@ -9,6 +9,7 @@ import re
 import signal
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import gi
@@ -18,6 +19,16 @@ gi.require_version("GLib", "2.0")
 from gi.repository import GLib, Gtk, Pango
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR / "lib"))
+try:
+    from discover_apps import discover_extra_apps, discover_known_status
+    from icon_lookup import load_pixbuf, lookup_icon_name
+except ImportError:
+    discover_extra_apps = None  # type: ignore[assignment]
+    discover_known_status = None  # type: ignore[assignment]
+    load_pixbuf = None  # type: ignore[assignment]
+    lookup_icon_name = None  # type: ignore[assignment]
+
 BACKUP_SH = SCRIPT_DIR / "backup.sh"
 RESTORE_SH = SCRIPT_DIR / "restore.sh"
 PARTS_PY = SCRIPT_DIR / "lib" / "restore_parts.py"
@@ -51,6 +62,28 @@ FRIENDLY = {
     "mempalace": "MemPalace",
     "tailscale": "Tailscale",
     "packages": "Packages",
+    "shell-dots": "Shell dotfiles",
+    "hyprland": "Hyprland",
+    "illogical-impulse": "illogical-impulse",
+    "matugen-colors": "Matugen colors",
+    "kde-theme": "KDE theming",
+    "gtk-theme": "GTK theme",
+    "desktop-entries": "Desktop entries",
+    "git-config": "Git + gh",
+    "mpv": "mpv",
+    "mangohud": "MangoHud",
+    "gaming-overlays": "Gaming overlays",
+    "input-remapper": "Input remapper",
+    "fonts": "Fonts",
+    "audio-config": "Audio config",
+    "klipper": "Klipper",
+    "yubico": "YubiKey",
+    "nvim": "Neovim / Vim",
+    "vscode": "VS Code",
+    "terminals": "Terminals",
+    "firefox": "Firefox",
+    "keepassxc": "KeePassXC",
+    "paru": "paru / yay",
 }
 
 # Parts that are usually opt-in (large / redundant with finer parts).
@@ -149,17 +182,18 @@ def part_default_on(part_id: str) -> bool:
 class BakupWindow(Gtk.Window):
     # TreeStore columns
     COL_CHECK = 0
-    COL_TITLE = 1
-    COL_PART_ID = 2
-    COL_DEST = 3
-    COL_DEFAULT_DEST = 4
-    COL_IS_LABEL = 5
-    COL_LABEL = 6
-    COL_DESC = 7
+    COL_ICON = 1
+    COL_TITLE = 2
+    COL_PART_ID = 3
+    COL_DEST = 4
+    COL_DEFAULT_DEST = 5
+    COL_IS_LABEL = 6
+    COL_LABEL = 7
+    COL_DESC = 8
 
     def __init__(self) -> None:
         super().__init__(title="Bakup — Backup / Restore")
-        self.set_default_size(980, 740)
+        self.set_default_size(1040, 800)
         self.set_border_width(10)
         self.connect("destroy", self._on_destroy)
 
@@ -169,8 +203,13 @@ class BakupWindow(Gtk.Window):
         self._progress_total = 0
         self._progress_done = 0
         self._updating_tree = False
+        self._label_present: dict[str, bool] = {}
+        self._extra_apps: list[dict] = []
+        self._extra_temp: str | None = None
 
         self.backup_checks: dict[str, Gtk.CheckButton] = {}
+        self.extra_checks: dict[str, Gtk.CheckButton] = {}
+        self._label_rows: dict[str, Gtk.Widget] = {}
 
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         self.add(root)
@@ -217,7 +256,8 @@ class BakupWindow(Gtk.Window):
         self._append_log(f"Script dir: {SCRIPT_DIR}\n")
         if not self.labels:
             self._append_log("WARNING: could not load labels from backup.sh --list-labels\n")
-
+        GLib.idle_add(self._refresh_presence)
+        GLib.idle_add(self._scan_extra_apps_silent)
     def _on_destroy(self, *_args) -> None:
         if Gtk.main_level() > 0:
             Gtk.main_quit()
@@ -243,21 +283,63 @@ class BakupWindow(Gtk.Window):
         self.backup_sudo.set_active(True)
         self.backup_preauth = Gtk.CheckButton(label="Pre-auth sudo (long runs)")
         self.backup_preauth.set_active(False)
+        self.backup_installed_only = Gtk.CheckButton(label="Show installed only")
+        self.backup_installed_only.set_active(True)
+        self.backup_installed_only.set_tooltip_text(
+            "Hide known labels that have no config/data on this machine."
+        )
+        self.backup_installed_only.connect("toggled", lambda *_: self._apply_installed_filter())
         opts.pack_start(self.backup_sudo, False, False, 0)
         opts.pack_start(self.backup_preauth, False, False, 0)
+        opts.pack_start(self.backup_installed_only, False, False, 0)
         box.pack_start(opts, False, False, 0)
 
-        box.pack_start(Gtk.Label(label="Labels to back up:", xalign=0), False, False, 0)
-        box.pack_start(self._label_grid(self.backup_checks, checked=True), True, True, 0)
+        box.pack_start(Gtk.Label(label="Known apps & settings:", xalign=0), False, False, 0)
+        self._label_scrolled, self._label_flow = self._make_flow()
+        box.pack_start(self._label_scrolled, True, True, 0)
+        self._rebuild_label_grid(checked=True)
 
         sel_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         all_btn = Gtk.Button(label="Select all")
-        all_btn.connect("clicked", lambda *_: self._set_all(self.backup_checks, True))
+        all_btn.connect("clicked", lambda *_: self._set_all_visible(self.backup_checks, True))
         none_btn = Gtk.Button(label="Select none")
-        none_btn.connect("clicked", lambda *_: self._set_all(self.backup_checks, False))
+        none_btn.connect("clicked", lambda *_: self._set_all_visible(self.backup_checks, False))
         sel_row.pack_start(all_btn, False, False, 0)
         sel_row.pack_start(none_btn, False, False, 0)
         box.pack_start(sel_row, False, False, 0)
+
+        # Discovered / other installed apps
+        extra_hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        extra_hdr.pack_start(
+            Gtk.Label(label="Other installed apps (settings):", xalign=0), True, True, 0
+        )
+        scan_btn = Gtk.Button(label="Scan for apps")
+        scan_btn.set_tooltip_text(
+            "Find ~/.config and Flatpak apps not already covered by known labels."
+        )
+        scan_btn.connect("clicked", lambda *_: self._scan_extra_apps())
+        extra_hdr.pack_start(scan_btn, False, False, 0)
+        box.pack_start(extra_hdr, False, False, 0)
+
+        self.extra_info = Gtk.Label(xalign=0)
+        self.extra_info.set_markup(
+            "<small>Click <b>Scan for apps</b> to list other installed apps "
+            "with settings you can back up.</small>"
+        )
+        self.extra_info.set_line_wrap(True)
+        box.pack_start(self.extra_info, False, False, 0)
+
+        self._extra_scrolled, self._extra_flow = self._make_flow(min_height=120)
+        box.pack_start(self._extra_scrolled, True, True, 0)
+
+        extra_sel = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        e_all = Gtk.Button(label="Select all extras")
+        e_all.connect("clicked", lambda *_: self._set_all(self.extra_checks, True))
+        e_none = Gtk.Button(label="Select none extras")
+        e_none.connect("clicked", lambda *_: self._set_all(self.extra_checks, False))
+        extra_sel.pack_start(e_all, False, False, 0)
+        extra_sel.pack_start(e_none, False, False, 0)
+        box.pack_start(extra_sel, False, False, 0)
 
         start = Gtk.Button(label="Start Backup")
         start.get_style_context().add_class("suggested-action")
@@ -265,6 +347,126 @@ class BakupWindow(Gtk.Window):
         box.pack_start(start, False, False, 0)
         return box
 
+    def _make_flow(self, min_height: int = 180) -> tuple[Gtk.ScrolledWindow, Gtk.FlowBox]:
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scrolled.set_min_content_height(min_height)
+        grid = Gtk.FlowBox()
+        grid.set_selection_mode(Gtk.SelectionMode.NONE)
+        grid.set_max_children_per_line(3)
+        grid.set_homogeneous(False)
+        grid.set_column_spacing(4)
+        grid.set_row_spacing(2)
+        scrolled.add(grid)
+        return scrolled, grid
+
+    def _icon_image(self, label: str, hint: str | None = None, size: int = 22) -> Gtk.Image:
+        img = Gtk.Image()
+        img.set_size_request(size, size)
+        pix = load_pixbuf(label, size, hint) if load_pixbuf else None
+        if pix is not None:
+            img.set_from_pixbuf(pix)
+        else:
+            name = (
+                lookup_icon_name(label, hint)
+                if lookup_icon_name
+                else "application-x-executable"
+            )
+            img.set_from_icon_name(name, Gtk.IconSize.BUTTON)
+            img.set_pixel_size(size)
+        return img
+
+    def _app_check_row(
+        self, label_id: str, title: str, tooltip: str, checked: bool, icon_hint: str | None = None
+    ) -> tuple[Gtk.Widget, Gtk.CheckButton]:
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        row.set_border_width(2)
+        row.pack_start(self._icon_image(label_id, icon_hint), False, False, 0)
+        cb = Gtk.CheckButton(label=title)
+        cb.set_active(checked)
+        cb.set_tooltip_text(tooltip)
+        row.pack_start(cb, True, True, 0)
+        row.show_all()
+        return row, cb
+
+    def _rebuild_label_grid(self, checked: bool = True) -> None:
+        for child in list(self._label_flow.get_children()):
+            self._label_flow.remove(child)
+        self.backup_checks.clear()
+        self._label_rows.clear()
+        for label in self.labels:
+            title = FRIENDLY.get(label, label)
+            row, cb = self._app_check_row(label, title, label, checked)
+            self.backup_checks[label] = cb
+            self._label_rows[label] = row
+            self._label_flow.add(row)
+        self._label_flow.show_all()
+        self._apply_installed_filter()
+
+    def _apply_installed_filter(self) -> None:
+        only = self.backup_installed_only.get_active()
+        for label, row in self._label_rows.items():
+            present = self._label_present.get(label, True)
+            row.set_visible(present if only else True)
+
+    def _refresh_presence(self) -> bool:
+        if discover_known_status is None:
+            return False
+        try:
+            status = discover_known_status(self.labels)
+            self._label_present = {s["id"]: bool(s["present"]) for s in status}
+            present_n = sum(1 for v in self._label_present.values() if v)
+            self._append_log(
+                f"Detected {present_n}/{len(self.labels)} known labels present on this machine.\n"
+            )
+            self._apply_installed_filter()
+        except Exception as exc:
+            self._append_log(f"Presence scan failed: {exc}\n")
+        return False
+
+    def _scan_extra_apps_silent(self) -> bool:
+        self._scan_extra_apps()
+        return False
+
+    def _scan_extra_apps(self) -> None:
+        if discover_extra_apps is None:
+            self._append_log("discover_apps module unavailable.\n")
+            return
+        try:
+            extras = discover_extra_apps(set(self.labels))
+        except Exception as exc:
+            self._append_log(f"App scan failed: {exc}\n")
+            return
+        self._extra_apps = extras
+        for child in list(self._extra_flow.get_children()):
+            self._extra_flow.remove(child)
+        self.extra_checks.clear()
+        for app in extras:
+            app_id = app["id"]
+            title = app.get("title") or app_id
+            paths = app.get("paths") or []
+            tip = f"{app_id}\n" + "\n".join(paths)
+            row, cb = self._app_check_row(
+                app_id, title, tip, checked=False, icon_hint=app.get("icon")
+            )
+            self.extra_checks[app_id] = cb
+            # stash paths on the checkbutton
+            cb._bakup_paths = paths  # type: ignore[attr-defined]
+            cb._bakup_title = title  # type: ignore[attr-defined]
+            self._extra_flow.add(row)
+        self._extra_flow.show_all()
+        self.extra_info.set_markup(
+            f"<small>Found <b>{len(extras)}</b> additional apps with config. "
+            "Select any to include in the backup.</small>"
+        )
+        self._append_log(f"Scanned {len(extras)} extra apps with settings.\n")
+
+    def _set_all_visible(self, store: dict[str, Gtk.CheckButton], value: bool) -> None:
+        for name, cb in store.items():
+            row = self._label_rows.get(name)
+            if row is not None and not row.get_visible():
+                continue
+            cb.set_active(value)
     # ------------------------------------------------------------------ Restore
     def _build_restore_tab(self) -> Gtk.Widget:
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
@@ -352,8 +554,10 @@ class BakupWindow(Gtk.Window):
         return box
 
     def _build_parts_tree(self) -> Gtk.Widget:
-        # check, title, part_id, dest, default_dest, is_label, label, desc
-        self.parts_store = Gtk.TreeStore(bool, str, str, str, str, bool, str, str)
+        # check, icon, title, part_id, dest, default_dest, is_label, label, desc
+        self.parts_store = Gtk.TreeStore(
+            bool, str, str, str, str, str, bool, str, str
+        )
         self.parts_view = Gtk.TreeView(model=self.parts_store)
         self.parts_view.set_headers_visible(True)
         self.parts_view.set_enable_tree_lines(True)
@@ -362,6 +566,10 @@ class BakupWindow(Gtk.Window):
         toggle.connect("toggled", self._on_part_toggled)
         col_check = Gtk.TreeViewColumn("", toggle, active=self.COL_CHECK)
         self.parts_view.append_column(col_check)
+
+        icon_r = Gtk.CellRendererPixbuf()
+        col_icon = Gtk.TreeViewColumn("", icon_r, icon_name=self.COL_ICON)
+        self.parts_view.append_column(col_icon)
 
         text = Gtk.CellRendererText()
         col_name = Gtk.TreeViewColumn("Item", text, text=self.COL_TITLE)
@@ -389,22 +597,10 @@ class BakupWindow(Gtk.Window):
         scrolled.add(self.parts_view)
         return scrolled
 
-    def _label_grid(self, store: dict[str, Gtk.CheckButton], checked: bool) -> Gtk.Widget:
-        scrolled = Gtk.ScrolledWindow()
-        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        scrolled.set_min_content_height(160)
-        grid = Gtk.FlowBox()
-        grid.set_selection_mode(Gtk.SelectionMode.NONE)
-        grid.set_max_children_per_line(4)
-        grid.set_homogeneous(True)
-        for label in self.labels:
-            cb = Gtk.CheckButton(label=FRIENDLY.get(label, label))
-            cb.set_active(checked)
-            cb.set_tooltip_text(label)
-            store[label] = cb
-            grid.add(cb)
-        scrolled.add(grid)
-        return scrolled
+    def _label_icon_name(self, label: str) -> str:
+        if lookup_icon_name:
+            return lookup_icon_name(label)
+        return "application-x-executable"
 
     # -------------------------------------------------------------- helpers
     def _set_all(self, store: dict[str, Gtk.CheckButton], value: bool) -> None:
@@ -412,7 +608,16 @@ class BakupWindow(Gtk.Window):
             cb.set_active(value)
 
     def _selected(self, store: dict[str, Gtk.CheckButton]) -> list[str]:
-        return [name for name, cb in store.items() if cb.get_active()]
+        selected: list[str] = []
+        for name, cb in store.items():
+            if not cb.get_active():
+                continue
+            # Skip known labels hidden by "installed only" filter
+            row = self._label_rows.get(name)
+            if row is not None and not row.get_visible():
+                continue
+            selected.append(name)
+        return selected
 
     def _browse_dest(self, _btn: Gtk.Button, entry: Gtk.Entry) -> None:
         dialog = Gtk.FileChooserDialog(
@@ -508,6 +713,7 @@ class BakupWindow(Gtk.Window):
                 None,
                 [
                     parent_on,
+                    self._label_icon_name(label),
                     FRIENDLY.get(label, label),
                     "",
                     "",
@@ -528,6 +734,7 @@ class BakupWindow(Gtk.Window):
                     parent,
                     [
                         on,
+                        "",
                         title,
                         part["id"],
                         dest,
@@ -580,9 +787,10 @@ class BakupWindow(Gtk.Window):
         self.parts_store[it][self.COL_DEST] = new_text.strip()
 
     def _on_parts_row_activated(self, _view: Gtk.TreeView, path: Gtk.TreePath, column: Gtk.TreeViewColumn) -> None:
-        # Double-click the dest column (index 2) or browse column (index 3) → folder picker
+        # Double-click the dest column or browse column → folder picker
         cols = self.parts_view.get_columns()
-        if column not in cols[2:]:
+        # columns: check(0), icon(1), name(2), dest(3), browse(4)
+        if column not in cols[3:]:
             return
         it = self.parts_store.get_iter(path)
         if self.parts_store[it][self.COL_IS_LABEL]:
@@ -664,11 +872,40 @@ class BakupWindow(Gtk.Window):
         if self.proc and self.proc.poll() is None:
             return
         selected = self._selected(self.backup_checks)
+        extra_selected: list[dict] = []
+        for app_id, cb in self.extra_checks.items():
+            if not cb.get_active():
+                continue
+            paths = getattr(cb, "_bakup_paths", None) or []
+            title = getattr(cb, "_bakup_title", app_id)
+            if not paths:
+                # fall back to scan cache
+                for app in self._extra_apps:
+                    if app["id"] == app_id:
+                        paths = app.get("paths") or []
+                        title = app.get("title") or app_id
+                        break
+            if paths:
+                extra_selected.append({"id": app_id, "title": title, "paths": paths})
+                selected.append(app_id)
         if not selected:
-            self._append_log("Select at least one label.\n")
+            self._append_log("Select at least one label or discovered app.\n")
             return
         dest = self.backup_dest.get_text().strip() or DEFAULT_DEST
         cmd = [str(BACKUP_SH), "--dest", dest, "--labels", ",".join(selected)]
+        if extra_selected:
+            # Write temp JSON for backup.sh --extra-apps
+            try:
+                fd, path = tempfile.mkstemp(prefix="bakup-extra-", suffix=".json")
+                os.close(fd)
+                Path(path).write_text(
+                    json.dumps(extra_selected, indent=2), encoding="utf-8"
+                )
+                self._extra_temp = path
+                cmd.extend(["--extra-apps", path])
+            except OSError as exc:
+                self._append_log(f"Failed to write extra-apps list: {exc}\n")
+                return
         if not self.backup_sudo.get_active():
             cmd.append("--no-sudo")
         if self.backup_preauth.get_active():
@@ -780,6 +1017,12 @@ class BakupWindow(Gtk.Window):
         self.progress.set_text("Done" if code == 0 else f"Failed (exit {code})")
         self.proc = None
         self._busy(False)
+        if self._extra_temp:
+            try:
+                os.unlink(self._extra_temp)
+            except OSError:
+                pass
+            self._extra_temp = None
         if self.notebook.get_current_page() == 1:
             self._refresh_snapshots()
         return False

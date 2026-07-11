@@ -68,14 +68,15 @@ DEST="${BACKUP_DEST:-/run/media/iggut/Data/bakup}"
 
 usage() {
   cat <<'EOF'
-Usage: backup.sh [--dest PATH] [--labels LIST] [--no-sudo] [--preauth-sudo]
-                 [--list-labels]
+Usage: backup.sh [--dest PATH] [--labels LIST] [--extra-apps FILE]
+                 [--no-sudo] [--preauth-sudo] [--list-labels]
 
 Creates one private, self-contained snapshot. BACKUP_DEST may also set the
 destination. Existing snapshot directories are never reused.
 
-  --labels LIST   Comma-separated subset of labels to back up
-  --list-labels   Print known labels (one per line) and exit
+  --labels LIST     Comma-separated subset of labels to back up
+  --extra-apps FILE JSON list of discovered apps: [{"id","paths":[...]}, ...]
+  --list-labels     Print known labels (one per line) and exit
 EOF
 }
 
@@ -85,12 +86,16 @@ ALL_LABELS=(
   inav kdeconnect claude antigravity cursor konsole heroic steam
   system system-root secrets extras-gemini extras-codex extras-agents
   mempalace tailscale packages
+  shell-dots hyprland illogical-impulse matugen-colors kde-theme gtk-theme
+  desktop-entries git-config mpv mangohud gaming-overlays input-remapper
+  fonts audio-config klipper yubico nvim vscode terminals firefox keepassxc paru
 )
 
 # CLI flags
 SKIP_SUDO=0
 PREAUTH_SUDO=0
 LABEL_FILTER=""
+EXTRA_APPS_FILE=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dest)
@@ -101,6 +106,11 @@ while [ "$#" -gt 0 ]; do
     --labels)
       [ "$#" -ge 2 ] && [ -n "$2" ] || { printf '%s\n' 'ERROR: --labels needs a comma list' >&2; exit 2; }
       LABEL_FILTER="$2"
+      shift 2
+      ;;
+    --extra-apps)
+      [ "$#" -ge 2 ] && [ -n "$2" ] || { printf '%s\n' 'ERROR: --extra-apps needs a JSON file' >&2; exit 2; }
+      EXTRA_APPS_FILE="$2"
       shift 2
       ;;
     --list-labels)
@@ -1030,6 +1040,254 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
+# Desktop shell / dotfiles / editors
+# ---------------------------------------------------------------------------
+
+backup_shell_dots() {
+  banner "Shell dotfiles"
+  for f in .bashrc .bash_profile .profile .zshrc .zprofile .zshenv .zlogin .inputrc; do
+    sync_one shell-dots "${HOME}/${f}"
+  done
+  sync_one shell-dots "${HOME}/.config/fish" \
+    'fish_history' 'fishd.' '*.log'
+  sync_one shell-dots "${HOME}/.config/starship.toml"
+  sync_one shell-dots "${HOME}/.local/share/fish" 'fish_history'
+  hash_label shell-dots
+}
+
+backup_hyprland() {
+  banner "Hyprland + Wayland shell"
+  sync_one hyprland "${HOME}/.config/hypr"
+  sync_one hyprland "${HOME}/.config/waybar"
+  sync_one hyprland "${HOME}/.config/wlogout"
+  sync_one hyprland "${HOME}/.config/wofi"
+  sync_one hyprland "${HOME}/.config/rofi"
+  sync_one hyprland "${HOME}/.config/fuzzel"
+  hash_label hyprland
+}
+
+backup_illogical_impulse() {
+  banner "illogical-impulse"
+  sync_one illogical-impulse "${HOME}/.config/illogical-impulse" \
+    'cache' 'Cache' '*.log'
+  hash_label illogical-impulse
+}
+
+backup_matugen_colors() {
+  banner "Matugen colors"
+  sync_one matugen-colors "${HOME}/.config/matugen" \
+    'cache' 'Cache'
+  hash_label matugen-colors
+}
+
+backup_kde_theme() {
+  banner "KDE theming"
+  for f in kdeglobals plasmarc plasmashellrc plasmanotifyrc plasmaparc \
+           plasma-localerc plasma-org.kde.plasma.desktop-appletsrc \
+           kwinrc kwinrulesrc kglobalshortcutsrc \
+           dolphinrc katerc katevirc konsolerc \
+           kde-material-you-colors Trolltech.conf; do
+    sync_one kde-theme "${HOME}/.config/${f}"
+  done
+  sync_one kde-theme "${HOME}/.local/share/plasma" \
+    'plasmashellstaterc' '*.lock'
+  sync_one kde-theme "${HOME}/.local/share/color-schemes"
+  sync_one kde-theme "${HOME}/.local/share/konsole"
+  sync_one kde-theme "${HOME}/.config/qt5ct"
+  sync_one kde-theme "${HOME}/.config/qt6ct"
+  hash_label kde-theme
+}
+
+backup_gtk_theme() {
+  banner "GTK theming"
+  sync_one gtk-theme "${HOME}/.config/gtk-3.0"
+  sync_one gtk-theme "${HOME}/.config/gtk-4.0"
+  sync_one gtk-theme "${HOME}/.gtkrc-2.0"
+  sync_one gtk-theme "${HOME}/.icons"
+  sync_one gtk-theme "${HOME}/.themes"
+  hash_label gtk-theme
+}
+
+backup_desktop_entries() {
+  banner "Desktop entries + MIME"
+  sync_one desktop-entries "${HOME}/.local/share/applications"
+  sync_one desktop-entries "${HOME}/.config/mimeapps.list"
+  sync_one desktop-entries "${HOME}/.local/share/mime" 'mime.cache'
+  sync_one desktop-entries "${HOME}/.config/autostart"
+  hash_label desktop-entries
+}
+
+backup_git_config() {
+  banner "Git + gh CLI"
+  sync_one git-config "${HOME}/.gitconfig"
+  sync_one git-config "${HOME}/.config/git"
+  sync_one git-config "${HOME}/.config/gh" \
+    'hosts.yml.bak'
+  # Do not copy credential stores with plaintext tokens if avoidable —
+  # gh hosts.yml may contain oauth tokens; user opted into git-config.
+  hash_label git-config
+}
+
+backup_mpv() {
+  banner "mpv"
+  sync_one mpv "${HOME}/.config/mpv" \
+    'watch_later' 'cache'
+  hash_label mpv
+}
+
+backup_mangohud() {
+  banner "MangoHud"
+  sync_one mangohud "${HOME}/.config/MangoHud"
+  hash_label mangohud
+}
+
+backup_gaming_overlays() {
+  banner "Gaming overlays"
+  sync_one gaming-overlays "${HOME}/.config/vkBasalt"
+  sync_one gaming-overlays "${HOME}/.config/gamescope"
+  sync_one gaming-overlays "${HOME}/.config/cava"
+  sync_one gaming-overlays "${HOME}/.config/goverlay"
+  hash_label gaming-overlays
+}
+
+backup_input_remapper() {
+  banner "Input remapper"
+  sync_one input-remapper "${HOME}/.config/input-remapper"
+  sync_one input-remapper "${HOME}/.config/input-remapper-2"
+  hash_label input-remapper
+}
+
+backup_fonts() {
+  banner "Custom fonts"
+  sync_one fonts "${HOME}/.local/share/fonts"
+  sync_one fonts "${HOME}/.fonts"
+  sync_one fonts "${HOME}/.config/fontconfig"
+  hash_label fonts
+}
+
+backup_audio_config() {
+  banner "Audio (PipeWire / Pulse)"
+  sync_one audio-config "${HOME}/.config/pipewire"
+  sync_one audio-config "${HOME}/.config/pulse" \
+    'cookie' '*.tdb'
+  sync_one audio-config "${HOME}/.config/wireplumber"
+  hash_label audio-config
+}
+
+backup_klipper() {
+  banner "Klipper clipboard"
+  sync_one klipper "${HOME}/.config/klipperrc"
+  sync_one klipper "${HOME}/.local/share/klipper"
+  hash_label klipper
+}
+
+backup_yubico() {
+  banner "Yubico / YubiKey"
+  sync_one yubico "${HOME}/.config/Yubico"
+  sync_one yubico "${HOME}/.yubico"
+  hash_label yubico
+}
+
+backup_nvim() {
+  banner "Neovim / Vim"
+  sync_one nvim "${HOME}/.config/nvim" \
+    '.git' 'lazy-lock.json.bak' '*.log' 'cache' 'Cache'
+  sync_one nvim "${HOME}/.local/share/nvim" \
+    'lazy' 'mason' 'treesitter' 'swap' 'undo' 'shada' 'log' 'rplugin.vim'
+  sync_one nvim "${HOME}/.vim"
+  sync_one nvim "${HOME}/.vimrc"
+  hash_label nvim
+}
+
+backup_vscode() {
+  banner "VS Code"
+  # Settings/extensions only — skip caches and large workspaces storage dumps.
+  sync_one vscode "${HOME}/.config/Code" \
+    'Cache' 'CachedData' 'CachedExtensions' 'CachedExtensionVSIXs' \
+    'Code Cache' 'GPUCache' 'Crashpad' 'logs' 'Service Worker' \
+    'blob_storage' 'Session Storage' 'Network Persistent State'
+  sync_one vscode "${HOME}/.config/Code - OSS" \
+    'Cache' 'CachedData' 'CachedExtensions' 'CachedExtensionVSIXs' \
+    'Code Cache' 'GPUCache' 'Crashpad' 'logs'
+  hash_label vscode
+}
+
+backup_terminals() {
+  banner "Terminal emulators"
+  sync_one terminals "${HOME}/.config/alacritty"
+  sync_one terminals "${HOME}/.config/kitty"
+  sync_one terminals "${HOME}/.config/foot"
+  sync_one terminals "${HOME}/.config/ghostty"
+  sync_one terminals "${HOME}/.config/wezterm"
+  hash_label terminals
+}
+
+backup_firefox() {
+  banner "Firefox"
+  # Profiles without caches / crash dumps (similar spirit to zen).
+  sync_one firefox "${HOME}/.mozilla" \
+    'cache2' 'startupCache' 'OfflineCache' 'thumbnails' \
+    'minidumps' 'crashes' 'datareporting' 'saved-telemetry-pings' \
+    'shader-cache' 'StartupCache'
+  hash_label firefox
+}
+
+backup_keepassxc() {
+  banner "KeePassXC"
+  sync_one keepassxc "${HOME}/.config/keepassxc"
+  hash_label keepassxc
+}
+
+backup_paru() {
+  banner "paru / yay"
+  sync_one paru "${HOME}/.config/paru"
+  sync_one paru "${HOME}/.config/yay"
+  hash_label paru
+}
+
+# Backup discovered apps from GUI JSON: [{"id":"cfg-btop","paths":["/home/.../.config/btop"]}, ...]
+backup_extra_apps() {
+  local file="$1"
+  local ids id path
+  [ -f "${file}" ] || return 0
+  banner "Discovered apps"
+  mapfile -t ids < <(python3 - "${file}" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+for item in data:
+    i = (item.get("id") or "").strip()
+    if i:
+        print(i)
+PY
+)
+  for id in "${ids[@]}"; do
+    [ -n "${id}" ] || continue
+    # Honor --labels filter when set; with no filter, back up every entry.
+    should_backup "${id}" || continue
+    printf 'PROGRESS label=%s status=start\n' "${id}"
+    while IFS= read -r path; do
+      [ -n "${path}" ] || continue
+      sync_one "${id}" "${path}" \
+        'Cache' 'cache' 'Code Cache' 'GPUCache' 'Crashpad' \
+        'logs' 'tmp' 'node_modules' '__pycache__' '.venv' '.git' \
+        'blob_storage' 'Service Worker' 'ShaderCache'
+    done < <(python3 - "${file}" "${id}" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+want = sys.argv[2]
+for item in data:
+    if item.get("id") == want:
+        for p in item.get("paths") or []:
+            print(p)
+        break
+PY
+)
+    hash_label "${id}"
+    printf 'PROGRESS label=%s status=done\n' "${id}"
+  done
+}
+
+# ---------------------------------------------------------------------------
 # Manifest + summary
 # ---------------------------------------------------------------------------
 
@@ -1109,6 +1367,33 @@ fi
 run_label mempalace       backup_mempalace
 run_label tailscale       backup_tailscale
 run_label packages        backup_package_state
+run_label shell-dots      backup_shell_dots
+run_label hyprland        backup_hyprland
+run_label illogical-impulse backup_illogical_impulse
+run_label matugen-colors  backup_matugen_colors
+run_label kde-theme       backup_kde_theme
+run_label gtk-theme       backup_gtk_theme
+run_label desktop-entries backup_desktop_entries
+run_label git-config      backup_git_config
+run_label mpv             backup_mpv
+run_label mangohud        backup_mangohud
+run_label gaming-overlays backup_gaming_overlays
+run_label input-remapper  backup_input_remapper
+run_label fonts           backup_fonts
+run_label audio-config    backup_audio_config
+run_label klipper         backup_klipper
+run_label yubico          backup_yubico
+run_label nvim            backup_nvim
+run_label vscode          backup_vscode
+run_label terminals       backup_terminals
+run_label firefox         backup_firefox
+run_label keepassxc       backup_keepassxc
+run_label paru            backup_paru
+
+# Discovered apps from the GUI (--extra-apps JSON).
+if [ -n "${EXTRA_APPS_FILE}" ] && [ -f "${EXTRA_APPS_FILE}" ]; then
+  backup_extra_apps "${EXTRA_APPS_FILE}"
+fi
 
 emit_manifest
 

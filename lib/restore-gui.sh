@@ -109,7 +109,7 @@ declare -A CATEGORY_LABELS=(
   ["system-secrets"]="system system-root secrets"
   ["memory-network"]="mempalace tailscale"
   ["agents-extras"]="extras-gemini extras-codex extras-agents"
-  ["desktop-shell"]="shell-dots hyprland illogical-impulse matugen-colors kde-theme gtk-theme desktop-entries git-config mpv mangohud gaming-overlays input-remapper fonts audio-config klipper yubico"
+  ["desktop-shell"]="shell-dots hyprland illogical-impulse matugen-colors kde-theme gtk-theme desktop-entries git-config mpv mangohud gaming-overlays input-remapper fonts audio-config klipper yubico nvim vscode terminals firefox keepassxc paru"
   ["packages"]="packages"
 )
 
@@ -156,6 +156,12 @@ declare -A LABEL_NAME=(
   ["audio-config"]="PulseAudio / PipeWire"
   ["klipper"]="Klipper (clipboard history)"
   ["yubico"]="Yubico / YubiKey"
+  ["nvim"]="Neovim / Vim"
+  ["vscode"]="VS Code"
+  ["terminals"]="Terminals (alacritty/kitty/…)"
+  ["firefox"]="Firefox"
+  ["keepassxc"]="KeePassXC"
+  ["paru"]="paru / yay"
 )
 
 # Stage 1 — backup picker.

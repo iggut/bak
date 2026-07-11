@@ -1,36 +1,48 @@
 # bak — Linux desktop backup & restore
 
-Opinionated, PII-free backup and restore scripts for Arch Linux desktops.
+Opinionated backup and restore scripts for Arch Linux desktops (Garuda-tested).
 Backs up application state, browser profiles, agent configs, secrets, and
-system files to an external drive; restores them on a fresh install with
-a GUI wizard.
+selected system files to an external drive; restores them on a fresh install
+with a CLI and GTK GUI.
+
+**Agents:** start at [AGENTS.md](AGENTS.md). Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Codemaps: [docs/CODEMAPS/](docs/CODEMAPS/).
 
 ## What it backs up
 
-| Category | Apps |
-|----------|------|
-| **Browsers** | Chromium, Zen Browser |
+| Category | Labels / apps |
+|----------|----------------|
+| **Browsers** | Chromium, Zen Browser, Firefox |
 | **Communication** | Telegram, Discord, KDE Connect |
-| **Media** | Spotify (+ Spicetify) |
-| **Gaming** | Steam, Heroic Games Launcher, INAV Configurator |
-| **Desktop** | DankMaterialShell/Quickshell, Konsole |
-| **AI agents** | Claude Code, Antigravity IDE, Cursor, Gemini CLI, Codex CLI |
-| **System** | SSH keys, GnuPG, NSS database, keyrings, NetworkManager connections |
-| **System (root)** | `/etc` config, `/var/lib` (pacman keyring, firewall rules) |
-| **Secrets** | `~/.secrets` (API keys, .env, .npmrc, tokens) |
-| **Packages** | Explicitly-installed package list (`pacman -Qqen`) |
+| **Media** | Spotify (+ Spicetify), mpv |
+| **Gaming** | Steam, Heroic, INAV, MangoHud, overlays (vkBasalt/gamescope/cava) |
+| **Desktop** | DankMaterialShell/Quickshell, Hyprland (+ waybar/wlogout/…), KDE/GTK themes, fonts, desktop entries |
+| **Shell & editors** | Shell dotfiles (bash/zsh/fish/starship), Konsole, terminals (alacritty/kitty/foot/ghostty), Neovim/Vim, VS Code |
+| **AI agents** | Hermes, Claude Code, Antigravity, Cursor, Gemini CLI, Codex CLI, other harnesses |
+| **Dev tools** | Git + gh, paru/yay config, input remapper |
+| **System** | SSH keys, GnuPG, NSS database, keyrings, NetworkManager, audio (PipeWire/Pulse), YubiKey, Klipper |
+| **System (root)** | `/etc` config, selected `/var/lib` (pacman keyring, firewall rules) |
+| **Secrets** | `~/.secrets` (API keys, .env, .npmrc, tokens), KeePassXC settings |
+| **Packages** | Explicitly-installed package list (`pacman -Qqen`) + AUR foreign list |
 | **Tailscale** | Status snapshot (node-key not backed up — re-auth required) |
+| **MemPalace** | SQLite + chroma data under `~/.mempalace` |
+| **Other apps** | GUI can scan `~/.config` / Flatpak apps and back up any selected settings tree |
 
+Full label list: `./backup.sh --list-labels` (must match `./restore.sh --list-labels`).
+The GTK GUI shows per-app icons, can filter to installed apps, and can scan for
+additional installed apps not in the curated list.
 ## Quick start
 
 ```bash
-# Backup (default destination: /run/media/$USER/Data/bakup)
+# Backup (default destination: $BACKUP_DEST or /run/media/$USER/Data/bakup)
 ./backup.sh
 
-# Restore with GUI wizard
+# Restore latest snapshot (CLI)
 ./restore.sh
 
-# Dry-run restore of specific apps
+# GTK GUI (backup + restore with per-part destinations)
+./bakup-gui
+
+# Dry-run restore of specific labels
 ./restore.sh --dry-run --apps claude,zen,kdeconnect
 
 # Restore from a specific backup timestamp
@@ -39,87 +51,55 @@ a GUI wizard.
 
 ## Configuration
 
-All settings are environment-variable overridable:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `BACKUP_ROOT` | `/run/media/$USER/Data/bakup` | Backup destination root |
-| `DRY_RUN` | `0` | Set to `1` for dry-run mode |
-| `SKIP_SUDO` | `0` | Set to `1` to skip privileged operations |
-| `BACKUP_USER_MANGLE` | _(auto)_ | Override for renamed accounts |
-| `MEMPALACE_VENV` | `$HOME/.mempalace/.venv` | MemPalace virtualenv path |
-| `BAKUP_ASKPASS` | _(auto-detected)_ | Custom askpass helper path |
-| `TAILSCALE_AUTHKEY_FILE` | `~/.secrets/tailscale-authkey` | Tailscale pre-auth key for auto-rejoin |
+| Variable / flag | Default | Description |
+|-----------------|---------|-------------|
+| `BACKUP_DEST` | `/run/media/$USER/Data/bakup` (hardcoded user path in scripts) | Backup destination root |
+| `--dest PATH` | _(from `BACKUP_DEST`)_ | Override destination / backup root |
+| `--labels LIST` | all | Backup only these labels (comma-separated) |
+| `--extra-apps FILE` | _(none)_ | (backup) JSON list of discovered apps to include |
+| `--apps LIST` | all | Restore only these labels |
+| `--dry-run` / `-n` | off | Show restore actions without writing |
+| `--no-sudo` | off | Skip privileged `/etc` and `/var` operations |
+| `--preauth-sudo` | off | (backup) Refresh sudo timestamp between labels |
 
 ## How it works
 
 ### Backup
 
 `backup.sh` uses `rsync` with per-app exclude rules (caches, logs, GPU
-shaders, node_modules, etc.) to create timestamped snapshots:
+shaders, node_modules, game downloads, etc.) to create timestamped snapshots:
 
 ```
-$BACKUP_ROOT/
+$BACKUP_DEST/
   20260709T183837Z_Hostname/
-    hermes/          # Hermes Agent config + state
-    chromium/        # Browser profiles (cookies, logins, history, extensions)
-    claude/          # Claude Code settings + agents + MCP configs
-    spotify/         # Spotify + Spicetify config
-    system/          # SSH, GnuPG, keyrings, NM connections
-    system-root/     # /etc + /var/lib (requires sudo)
-    mempalace/       # MemPalace SQLite + chromadb/HNSW (live snapshot)
-    ...
-    SHA256SUMS       # Integrity hashes for every file
-    MANIFEST.json    # Backup metadata
+    hermes/            # Hermes Agent config + state
+    chromium/home/…    # Modern layout: paths relative to $HOME
+    claude/home/…      # Claude Code settings + agents + MCP configs
+    spotify/home/…
+    system/            # SSH, GnuPG, keyrings, NM connections
+    system-root/       # /etc + /var/lib (requires sudo)
+    mempalace/         # MemPalace SQLite + chromadb
+    …
+    SHA256SUMS         # Integrity hashes
+    MANIFEST.json      # Backup metadata
 ```
+
+Modern snapshots store user trees under `<label>/home/<relpath>`. Older
+snapshots used mangled directory names; restore still supports both.
 
 ### Restore
 
-`restore.sh` unmangles backup directory names back to their original
-`$HOME`-relative paths and `rsync`s them back with `--backup` (existing
-files are preserved as `.bak-<timestamp>` rather than overwritten).
+`restore.sh` prefers the modern `home/` layout (`rsync` onto `$HOME` with
+`--backup` so existing files become `.bak-<timestamp>`). Label-specific
+logic covers telegram, steam, secrets, packages, mempalace, tailscale, and
+privileged system paths.
 
-The optional GUI wizard (`lib/restore-gui.sh`) provides a 4-step popup
-flow:
+The GTK GUI (`./bakup-gui`) provides backup label selection and an expandable
+restore tree of **parts** with an editable **Restore to** column.
 
-1. **Pick backup** — select timestamp from dropdown
-2. **Pick categories** — checkbox per app group
-3. **Per-label drilldown** — expand each category to select individual
-   items; Tailscale auth-key prompt
-4. **Confirm** — summary of everything that will be restored
+An older zenity multi-step wizard lives in `lib/restore-gui.sh`.
 
-### Path unmangling
-
-Backup directory names are mangled versions of absolute paths:
-
-- `sync_one` (most labels): `sed 's|^/||;s|/|_|g'`
-  - `/home/user/.config/chromium` → `home_user_.config_chromium`
-- Antigravity: `tr '/ ' '__'` (preserves leading slash as underscore)
-  - `/home/user/.antigravity-ide` → `_home_user_.antigravity-ide`
-- Special literals: `quickshell`, `dot-config`, Telegram share names
-
-`restore_map_path()` reverses these generically — no hardcoded lookup
-table, works for any username.
-
-## Requirements
-
-- Arch Linux (or Arch-based distro with `pacman`)
-- `rsync`, `sqlite3`, `coreutils`
-- `zenity` (for GUI wizard)
-- `sudo` (for system-root backup/restore)
-- Optional: `paru` or `yay` (AUR package install on restore)
-
-## Install
-
-```bash
-./install.sh    # Copies to ~/.local/share/bakup/, symlinks to ~/.local/bin/
-```
-
-## License
-
-MIT — see [LICENSE](LICENSE).
-
-## Partial restore
+### Partial restore
 
 Restore individual pieces of a label (bookmarks only, one agent harness, etc.)
 and optionally change the destination path:
@@ -136,5 +116,34 @@ and optionally change the destination path:
   --map extras-agents/openclaw=/tmp/openclaw-copy
 ```
 
-The GTK GUI (`./bakup-gui`) shows an expandable tree of parts with an editable
-**Restore to** column (defaults to the original path).
+## Requirements
+
+- Arch Linux (or Arch-based distro with `pacman`)
+- `rsync`, `sqlite3`, `coreutils`, `python3`
+- GTK3 + PyGObject (`python-gobject`) for `./bakup-gui`
+- `zenity` (optional; askpass / older restore wizard)
+- `sudo` (for system-root backup/restore and package install)
+- Optional: `paru` or `yay` (AUR package install on restore)
+
+## Install
+
+```bash
+./install.sh    # Copies to ~/.local/share/bakup/, symlinks to ~/.local/bin/
+```
+
+Creates `backup`, `restore`, and `bakup-gui` on your PATH (ensure
+`~/.local/bin` is included).
+
+## Development / tests
+
+```bash
+diff <(./backup.sh --list-labels) <(./restore.sh --list-labels)
+./test/test_restore_map.sh
+python3 -m py_compile bakup-gui.py lib/restore_parts.py
+```
+
+See [AGENTS.md](AGENTS.md) for contribution rules aimed at coding agents.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

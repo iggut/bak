@@ -16,10 +16,10 @@ mkdir -p "${PREFIX}" "${PREFIX}/lib" "${BINDIR}"
 cp -a backup.sh restore.sh bakup-gui.py bakup-gui "${PREFIX}/"
 [ -f bakup.desktop ] && cp -a bakup.desktop "${PREFIX}/"
 cp -a lib/*.sh "${PREFIX}/lib/"
-cp -a lib/restore_parts.py "${PREFIX}/lib/"
+cp -a lib/*.py "${PREFIX}/lib/"
 
 chmod +x "${PREFIX}/backup.sh" "${PREFIX}/restore.sh" "${PREFIX}/bakup-gui"
-chmod +x "${PREFIX}/lib/"*.sh "${PREFIX}/lib/restore_parts.py"
+chmod +x "${PREFIX}/lib/"*.sh "${PREFIX}/lib/"*.py
 
 ln -sf "${PREFIX}/backup.sh" "${BINDIR}/backup"
 ln -sf "${PREFIX}/restore.sh" "${BINDIR}/restore"

@@ -50,6 +50,9 @@ ALL_LABELS=(
   inav kdeconnect claude antigravity cursor konsole heroic steam
   system system-root secrets extras-gemini extras-codex extras-agents
   mempalace tailscale packages
+  shell-dots hyprland illogical-impulse matugen-colors kde-theme gtk-theme
+  desktop-entries git-config mpv mangohud gaming-overlays input-remapper
+  fonts audio-config klipper yubico nvim vscode terminals firefox keepassxc paru
 )
 
 usage() {
@@ -413,7 +416,9 @@ restore_label() {
   [ -d "${src}" ] || { log "  (missing) ${label} — nothing to restore"; return; }
   log "  restore ${label}"
   case "${label}" in
-    hermes-ui|chromium|zen|dms|discord|spotify|kdeconnect|claude|antigravity|cursor|konsole|heroic|extras-gemini|extras-codex|extras-agents)
+    hermes-ui|chromium|zen|dms|discord|spotify|kdeconnect|claude|antigravity|cursor|konsole|heroic|extras-gemini|extras-codex|extras-agents|\
+    shell-dots|hyprland|illogical-impulse|matugen-colors|kde-theme|gtk-theme|desktop-entries|git-config|\
+    mpv|mangohud|gaming-overlays|input-remapper|fonts|audio-config|klipper|yubico|nvim|vscode|terminals|firefox|keepassxc|paru)
       if restore_home_tree "${src}"; then
         # Flatpak discord may still live beside home/ in some snapshots.
         [ -d "${src}/flatpak-discord" ] && \
@@ -565,7 +570,12 @@ restore_label() {
     system-root)
       restore_system_root "${src}" ;;
     *)
-      log "  no restore logic for label '${label}'"
+      # Discovered apps (cfg-*) and any future home/-layout labels.
+      if restore_home_tree "${src}"; then
+        :
+      else
+        log "  no restore logic for label '${label}' (and no home/ tree)"
+      fi
       ;;
   esac
 }
