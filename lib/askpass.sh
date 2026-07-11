@@ -8,9 +8,8 @@
 # password; thereafter sudo's built-in timestamp cache keeps the credential
 # for subsequent sudo calls in the same run.
 #
-# Standard pattern (set up by sudo-helper.sh, sourced from backup.sh and
-# restore.sh):
-#     SUDO_ASKPASS="$(dirname "$0")/askpass.sh"
+# Standard pattern (set up in backup.sh and restore.sh):
+#     SUDO_ASKPASS=/run/media/iggut/Data/bakup/lib/askpass.sh
 #     export SUDO_ASKPASS
 #     sudo -A -v           # prime the credential (asks if not NOPASSWD)
 #     sudo -A pacman -S …

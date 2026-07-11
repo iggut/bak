@@ -118,3 +118,23 @@ table, works for any username.
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+## Partial restore
+
+Restore individual pieces of a label (bookmarks only, one agent harness, etc.)
+and optionally change the destination path:
+
+```bash
+# List available parts for a snapshot (JSON)
+./restore.sh /path/to/SNAPSHOT --list-parts
+
+# Restore selected parts (original locations by default)
+./restore.sh SNAPSHOT --parts zen/bookmarks,extras-agents/openclaw
+
+# Override destination for a part
+./restore.sh SNAPSHOT --parts extras-agents/openclaw \
+  --map extras-agents/openclaw=/tmp/openclaw-copy
+```
+
+The GTK GUI (`./bakup-gui`) shows an expandable tree of parts with an editable
+**Restore to** column (defaults to the original path).

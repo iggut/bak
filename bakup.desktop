@@ -1,0 +1,13 @@
+#!/usr/bin/env xdg-open
+[Desktop Entry]
+Type=Application
+Name=Bakup
+GenericName=Backup / Restore
+Comment=Back up and restore app state, secrets, and system config
+Exec=/usr/bin/python3 /run/media/iggut/Data/bakup/bakup-gui.py
+Path=/run/media/iggut/Data/bakup
+Icon=system-software-install
+Terminal=false
+Categories=Utility;System;
+Keywords=backup;restore;rsync;
+StartupNotify=true

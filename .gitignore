@@ -1,0 +1,12 @@
+# Backup snapshots produced by backup.sh (YYYYMMDDThhmmssZ_hostname/)
+[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T*/
+
+# Local / editor / agent scratch that may live beside the scripts
+__pycache__/
+*.py[cod]
+.agents/
+.codex/
+.cursor/
+*.swp
+*~
+.DS_Store

@@ -30,9 +30,7 @@ sudo_init() {
     echo "sudo_init: usage: sudo_init <dir-containing-lib>" 1>&2
     return 64
   fi
-  # Allow caller to override the askpass location via env var (CLI flag
-  # plugin point: --askpass <path>).  Falls back to <script_dir>/askpass.sh.
-  SUDO_ASKPASS_PROGRAM="${BAKUP_ASKPASS:-${script_dir}/askpass.sh}"
+  SUDO_ASKPASS_PROGRAM="${script_dir}/askpass.sh"
   if [ ! -x "${SUDO_ASKPASS_PROGRAM}" ]; then
     echo "sudo_init: askpass not found or not executable: ${SUDO_ASKPASS_PROGRAM}" 1>&2
     return 1
