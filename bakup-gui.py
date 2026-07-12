@@ -374,24 +374,20 @@ class BakupWindow(Gtk.Window):
         opts.pack_start(self.backup_installed_only, False, False, 0)
         box.pack_start(opts, False, False, 0)
 
-        # Columns layout container
-        cols_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        cols_box.set_hexpand(True)
-        cols_box.set_vexpand(True)
-        box.pack_start(cols_box, True, True, 0)
+        # Resizable columns container (single Gtk.Paned)
+        paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
+        paned.set_hexpand(True)
+        paned.set_vexpand(True)
+        box.pack_start(paned, True, True, 0)
 
-        # Column 1: Known apps
+        # Column 1 (Left): Known apps
         col1 = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         col1.set_hexpand(True)
         col1.set_vexpand(True)
+        col1.set_size_request(280, -1)
         col1.pack_start(Gtk.Label(label="Known apps & settings:", xalign=0), False, False, 0)
 
-        # Spacer to align with col2/col3 info labels
-        col1_spacer = Gtk.Label()
-        col1_spacer.set_markup("<small> </small>")
-        col1.pack_start(col1_spacer, False, False, 0)
-
-        self._label_scrolled, self._label_flow = self._make_flow(min_height=180, max_per_line=1)
+        self._label_scrolled, self._label_flow = self._make_flow(min_height=320, max_per_line=1)
         col1.pack_start(self._label_scrolled, True, True, 0)
         self._rebuild_label_grid(checked=True)
 
@@ -404,12 +400,13 @@ class BakupWindow(Gtk.Window):
         sel_row.pack_start(none_btn, False, False, 0)
         col1.pack_start(sel_row, False, False, 0)
 
-        cols_box.pack_start(col1, True, True, 0)
+        paned.pack1(col1, resize=True, shrink=False)
 
-        # Column 2: Other installed apps
+        # Column 2 (Right): Other installed apps
         col2 = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         col2.set_hexpand(True)
         col2.set_vexpand(True)
+        col2.set_size_request(280, -1)
 
         extra_hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         extra_hdr.pack_start(
@@ -430,7 +427,7 @@ class BakupWindow(Gtk.Window):
         self.extra_info.set_line_wrap(True)
         col2.pack_start(self.extra_info, False, False, 0)
 
-        self._extra_scrolled, self._extra_flow = self._make_flow(min_height=180, max_per_line=1)
+        self._extra_scrolled, self._extra_flow = self._make_flow(min_height=320, max_per_line=1)
         col2.pack_start(self._extra_scrolled, True, True, 0)
 
         extra_sel = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -442,28 +439,23 @@ class BakupWindow(Gtk.Window):
         extra_sel.pack_start(e_none, False, False, 0)
         col2.pack_start(extra_sel, False, False, 0)
 
-        cols_box.pack_start(col2, True, True, 0)
+        paned.pack2(col2, resize=True, shrink=False)
 
-        # Column 3: Custom backups
-        col3 = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        col3.set_hexpand(True)
-        col3.set_vexpand(True)
+        # Separator below columns
+        box.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 6)
 
-        custom_hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        custom_hdr.pack_start(
-            Gtk.Label(label="Custom backups (dotfiles/themes):", xalign=0), True, True, 0
-        )
-        col3.pack_start(custom_hdr, False, False, 0)
+        # Custom backups spanning full width at the bottom (below both columns)
+        custom_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        custom_box.pack_start(Gtk.Label(label="Custom backups (dotfiles/themes):", xalign=0), False, False, 0)
 
         custom_info = Gtk.Label(xalign=0)
         custom_info.set_markup(
             "<small>Manage inside the Custom Paths tab.</small>"
         )
-        custom_info.set_line_wrap(True)
-        col3.pack_start(custom_info, False, False, 0)
+        custom_box.pack_start(custom_info, False, False, 0)
 
-        self._custom_scrolled, self._custom_flow = self._make_flow(min_height=180, max_per_line=1)
-        col3.pack_start(self._custom_scrolled, True, True, 0)
+        self._custom_scrolled, self._custom_flow = self._make_flow(min_height=140, max_per_line=3)
+        custom_box.pack_start(self._custom_scrolled, True, True, 0)
 
         custom_sel = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         c_all = Gtk.Button(label="Select all")
@@ -472,9 +464,9 @@ class BakupWindow(Gtk.Window):
         c_none.connect("clicked", lambda *_: self._set_all(self.custom_checks, False))
         custom_sel.pack_start(c_all, False, False, 0)
         custom_sel.pack_start(c_none, False, False, 0)
-        col3.pack_start(custom_sel, False, False, 0)
+        custom_box.pack_start(custom_sel, False, False, 0)
 
-        cols_box.pack_start(col3, True, True, 0)
+        box.pack_start(custom_box, False, True, 0)
 
         start = Gtk.Button(label="Start Backup")
         start.get_style_context().add_class("suggested-action")
