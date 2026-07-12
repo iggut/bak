@@ -91,3 +91,12 @@ Do not run a full live backup/restore against the user’s machine unless they a
 ## Docs maintenance
 
 When behavior changes, update in this order: code → `AGENTS.md` / `docs/` if agent contracts change → `README.md` for user-visible CLI and tables.
+
+## Learned User Preferences
+
+- GTK backup/restore app icons must render at a uniform size; use the Hermes Agent icon sizing as the reference when icons look mismatched.
+- Partial restore should support remapping destinations (e.g. individual agent trees) while keeping the original path as the default.
+
+## Learned Workspace Facts
+
+- Published GitHub repo is `iggut/bak` (branded “bak”); this workspace folder is often named `bakup` and may also be the live `BACKUP_DEST`.
