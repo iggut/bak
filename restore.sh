@@ -1071,6 +1071,23 @@ else
       _pre_labels+=("${label}")
     fi
   done
+  # Also scan for custom and cfg labels in the snapshot
+  for d in "${BACKUP}"/*; do
+    [ -d "${d}" ] || continue
+    name="${d##*/}"
+    case "${name}" in
+      cfg-*|custom-*)
+        if should_run "${name}"; then
+          # Avoid duplicates
+          found=0
+          for _l in "${_pre_labels[@]+"${_pre_labels[@]}"}"; do
+            [ "${_l}" = "${name}" ] && found=1 && break
+          done
+          [ "${found}" -eq 0 ] && _pre_labels+=("${name}")
+        fi
+        ;;
+    esac
+  done
   # --apps may also name dynamic cfg-* labels from the GUI discovery scan.
   if [ -n "${APP_FILTER}" ]; then
     IFS=',' read -ra _app_arr <<< "${APP_FILTER}"

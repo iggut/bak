@@ -184,10 +184,12 @@ def candidate_icon_names(label: str, hint: str | None = None) -> list[str]:
     for fb in LABEL_ICON_FALLBACKS.get(label, ()):
         add(fb)
 
-    # Strip cfg- prefix used for discovered apps
+    # Strip cfg- or custom- prefix used for discovered/custom apps
     slug = label
     if slug.startswith("cfg-"):
         slug = slug[4:]
+    elif slug.startswith("custom-"):
+        slug = slug[7:]
     add(slug)
     add(slug.replace("_", "-"))
     add(slug.replace("-", "_"))
@@ -200,6 +202,11 @@ def candidate_icon_names(label: str, hint: str | None = None) -> list[str]:
         if key == slug.lower() or key.endswith("." + slug.lower()) or slug.lower() in key:
             add(icon)
             break
+
+    if label.startswith("custom-"):
+        add("folder")
+        add("folder-symbolic")
+        add("document-properties")
 
     add(DEFAULT_ICON)
     add("application-x-executable-symbolic")

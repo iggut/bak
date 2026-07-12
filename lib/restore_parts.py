@@ -1037,6 +1037,21 @@ PART_BUILDERS: dict[str, Callable[[Path], list[Part]]] = {
 }
 
 
+def get_friendly_label(label: str) -> str:
+    if label in FRIENDLY_LABEL:
+        return FRIENDLY_LABEL[label]
+    if label.startswith("custom-"):
+        parts = label[len("custom-"):].split("-")
+        return " ".join(p.capitalize() for p in parts) + " (Custom)"
+    if label.startswith("cfg-flatpak-"):
+        parts = label[len("cfg-flatpak-"):].split("-")
+        return " ".join(p.capitalize() for p in parts) + " (Flatpak)"
+    if label.startswith("cfg-"):
+        parts = label[len("cfg-"):].split("-")
+        return " ".join(p.capitalize() for p in parts) + " (Config)"
+    return label
+
+
 def discover_parts(snapshot: Path, labels: Iterable[str] | None = None) -> list[Part]:
     snapshot = Path(snapshot)
     if not snapshot.is_dir():
@@ -1081,7 +1096,7 @@ def discover_parts(snapshot: Path, labels: Iterable[str] | None = None) -> list[
                     Part(
                         id=f"{label}/all",
                         label=label,
-                        title=FRIENDLY_LABEL.get(label, label),
+                        title=get_friendly_label(label),
                         description=str(label_dir),
                         items=[
                             RestoreItem(

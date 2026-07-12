@@ -1395,6 +1395,11 @@ if [ -n "${EXTRA_APPS_FILE}" ] && [ -f "${EXTRA_APPS_FILE}" ]; then
   backup_extra_apps "${EXTRA_APPS_FILE}"
 fi
 
+# Custom persistent backups (dotfiles/themes/app modifications)
+if [ -f "${HOME}/.config/bakup/custom.json" ]; then
+  backup_extra_apps "${HOME}/.config/bakup/custom.json"
+fi
+
 emit_manifest
 
 banner "Summary"

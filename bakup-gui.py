@@ -16,7 +16,7 @@ import gi
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("GLib", "2.0")
-from gi.repository import GLib, Gtk, Pango
+from gi.repository import GLib, Gtk, Pango, Gdk
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR / "lib"))
@@ -33,6 +33,7 @@ BACKUP_SH = SCRIPT_DIR / "backup.sh"
 RESTORE_SH = SCRIPT_DIR / "restore.sh"
 PARTS_PY = SCRIPT_DIR / "lib" / "restore_parts.py"
 DEFAULT_DEST = os.environ.get("BACKUP_DEST", "/run/media/iggut/Data/bakup")
+CUSTOM_CONFIG_PATH = Path("~/.config/bakup/custom.json").expanduser()
 
 PROGRESS_RE = re.compile(r"^PROGRESS label=(\S+) status=(start|done)\s*$")
 
@@ -85,6 +86,21 @@ FRIENDLY = {
     "keepassxc": "KeePassXC",
     "paru": "paru / yay",
 }
+
+
+def get_friendly_name(label: str) -> str:
+    if label in FRIENDLY:
+        return FRIENDLY[label]
+    if label.startswith("custom-"):
+        parts = label[len("custom-"):].split("-")
+        return " ".join(p.capitalize() for p in parts) + " (Custom)"
+    if label.startswith("cfg-flatpak-"):
+        parts = label[len("cfg-flatpak-"):].split("-")
+        return " ".join(p.capitalize() for p in parts) + " (Flatpak)"
+    if label.startswith("cfg-"):
+        parts = label[len("cfg-"):].split("-")
+        return " ".join(p.capitalize() for p in parts) + " (Config)"
+    return label
 
 # Parts that are usually opt-in (large / redundant with finer parts).
 DEFAULT_OFF_SUFFIXES = (
@@ -197,6 +213,67 @@ class BakupWindow(Gtk.Window):
         self.set_border_width(10)
         self.connect("destroy", self._on_destroy)
 
+        # Apply custom GTK3 styles for a modern, premium aesthetic
+        try:
+            css_provider = Gtk.CssProvider()
+            css_provider.load_from_data(b"""
+                /* Premium styling highlights */
+                button {
+                    border-radius: 6px;
+                    padding: 6px 14px;
+                    transition: background-color 0.2s ease, border-color 0.2s ease;
+                }
+                button.suggested-action {
+                    background-color: #3584e4;
+                    color: white;
+                    font-weight: bold;
+                    border: 1px solid #1b60c4;
+                }
+                button.suggested-action:hover {
+                    background-color: #4a90e2;
+                }
+                button.destructive-action {
+                    background-color: #e01b24;
+                    color: white;
+                    font-weight: bold;
+                    border: 1px solid #a51d24;
+                }
+                button.destructive-action:hover {
+                    background-color: #ec5858;
+                }
+                entry {
+                    border-radius: 6px;
+                    padding: 6px;
+                }
+                progressbar progress {
+                    background-color: #3584e4;
+                    background-image: linear-gradient(to right, #3584e4, #12c2e9);
+                    border-radius: 4px;
+                }
+                progressbar trough {
+                    border-radius: 4px;
+                }
+                notebook {
+                    border-radius: 6px;
+                }
+                notebook tab {
+                    padding: 6px 12px;
+                    font-weight: 500;
+                }
+                notebook tab:checked {
+                    border-bottom: 2px solid #3584e4;
+                }
+            """)
+            screen = Gdk.Screen.get_default()
+            if screen:
+                Gtk.StyleContext.add_provider_for_screen(
+                    screen,
+                    css_provider,
+                    Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+                )
+        except Exception as e:
+            sys.stderr.write(f"Failed to apply custom CSS: {e}\n")
+
         self.labels = list_labels()
         self.proc = None
         self._io_id = None
@@ -209,6 +286,7 @@ class BakupWindow(Gtk.Window):
 
         self.backup_checks: dict[str, Gtk.CheckButton] = {}
         self.extra_checks: dict[str, Gtk.CheckButton] = {}
+        self.custom_checks: dict[str, Gtk.CheckButton] = {}
         self._label_rows: dict[str, Gtk.Widget] = {}
 
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -226,6 +304,7 @@ class BakupWindow(Gtk.Window):
 
         self.notebook.append_page(self._build_backup_tab(), Gtk.Label(label="Backup"))
         self.notebook.append_page(self._build_restore_tab(), Gtk.Label(label="Restore"))
+        self.notebook.append_page(self._build_custom_paths_tab(), Gtk.Label(label="Custom Paths"))
 
         log_frame = Gtk.Frame(label="Log")
         root.pack_start(log_frame, True, True, 0)
@@ -258,6 +337,7 @@ class BakupWindow(Gtk.Window):
             self._append_log("WARNING: could not load labels from backup.sh --list-labels\n")
         GLib.idle_add(self._refresh_presence)
         GLib.idle_add(self._scan_extra_apps_silent)
+        GLib.idle_add(self._rebuild_custom_grid)
     def _on_destroy(self, *_args) -> None:
         if Gtk.main_level() > 0:
             Gtk.main_quit()
@@ -294,9 +374,25 @@ class BakupWindow(Gtk.Window):
         opts.pack_start(self.backup_installed_only, False, False, 0)
         box.pack_start(opts, False, False, 0)
 
-        box.pack_start(Gtk.Label(label="Known apps & settings:", xalign=0), False, False, 0)
-        self._label_scrolled, self._label_flow = self._make_flow()
-        box.pack_start(self._label_scrolled, True, True, 0)
+        # Columns layout container
+        cols_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        cols_box.set_hexpand(True)
+        cols_box.set_vexpand(True)
+        box.pack_start(cols_box, True, True, 0)
+
+        # Column 1: Known apps
+        col1 = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        col1.set_hexpand(True)
+        col1.set_vexpand(True)
+        col1.pack_start(Gtk.Label(label="Known apps & settings:", xalign=0), False, False, 0)
+
+        # Spacer to align with col2/col3 info labels
+        col1_spacer = Gtk.Label()
+        col1_spacer.set_markup("<small> </small>")
+        col1.pack_start(col1_spacer, False, False, 0)
+
+        self._label_scrolled, self._label_flow = self._make_flow(min_height=180, max_per_line=1)
+        col1.pack_start(self._label_scrolled, True, True, 0)
         self._rebuild_label_grid(checked=True)
 
         sel_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -306,40 +402,79 @@ class BakupWindow(Gtk.Window):
         none_btn.connect("clicked", lambda *_: self._set_all_visible(self.backup_checks, False))
         sel_row.pack_start(all_btn, False, False, 0)
         sel_row.pack_start(none_btn, False, False, 0)
-        box.pack_start(sel_row, False, False, 0)
+        col1.pack_start(sel_row, False, False, 0)
 
-        # Discovered / other installed apps
+        cols_box.pack_start(col1, True, True, 0)
+
+        # Column 2: Other installed apps
+        col2 = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        col2.set_hexpand(True)
+        col2.set_vexpand(True)
+
         extra_hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         extra_hdr.pack_start(
             Gtk.Label(label="Other installed apps (settings):", xalign=0), True, True, 0
         )
-        scan_btn = Gtk.Button(label="Scan for apps")
+        scan_btn = Gtk.Button(label="Scan")
         scan_btn.set_tooltip_text(
             "Find ~/.config and Flatpak apps not already covered by known labels."
         )
         scan_btn.connect("clicked", lambda *_: self._scan_extra_apps())
         extra_hdr.pack_start(scan_btn, False, False, 0)
-        box.pack_start(extra_hdr, False, False, 0)
+        col2.pack_start(extra_hdr, False, False, 0)
 
         self.extra_info = Gtk.Label(xalign=0)
         self.extra_info.set_markup(
-            "<small>Click <b>Scan for apps</b> to list other installed apps "
-            "with settings you can back up.</small>"
+            "<small>Scan to list other settings.</small>"
         )
         self.extra_info.set_line_wrap(True)
-        box.pack_start(self.extra_info, False, False, 0)
+        col2.pack_start(self.extra_info, False, False, 0)
 
-        self._extra_scrolled, self._extra_flow = self._make_flow(min_height=120)
-        box.pack_start(self._extra_scrolled, True, True, 0)
+        self._extra_scrolled, self._extra_flow = self._make_flow(min_height=180, max_per_line=1)
+        col2.pack_start(self._extra_scrolled, True, True, 0)
 
         extra_sel = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        e_all = Gtk.Button(label="Select all extras")
+        e_all = Gtk.Button(label="Select all")
         e_all.connect("clicked", lambda *_: self._set_all(self.extra_checks, True))
-        e_none = Gtk.Button(label="Select none extras")
+        e_none = Gtk.Button(label="Select none")
         e_none.connect("clicked", lambda *_: self._set_all(self.extra_checks, False))
         extra_sel.pack_start(e_all, False, False, 0)
         extra_sel.pack_start(e_none, False, False, 0)
-        box.pack_start(extra_sel, False, False, 0)
+        col2.pack_start(extra_sel, False, False, 0)
+
+        cols_box.pack_start(col2, True, True, 0)
+
+        # Column 3: Custom backups
+        col3 = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        col3.set_hexpand(True)
+        col3.set_vexpand(True)
+
+        custom_hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        custom_hdr.pack_start(
+            Gtk.Label(label="Custom backups (dotfiles/themes):", xalign=0), True, True, 0
+        )
+        col3.pack_start(custom_hdr, False, False, 0)
+
+        custom_info = Gtk.Label(xalign=0)
+        custom_info.set_markup(
+            "<small>Manage inside the Custom Paths tab.</small>"
+        )
+        custom_info.set_line_wrap(True)
+        col3.pack_start(custom_info, False, False, 0)
+
+        self._custom_scrolled, self._custom_flow = self._make_flow(min_height=180, max_per_line=1)
+        col3.pack_start(self._custom_scrolled, True, True, 0)
+
+        custom_sel = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        c_all = Gtk.Button(label="Select all")
+        c_all.connect("clicked", lambda *_: self._set_all(self.custom_checks, True))
+        c_none = Gtk.Button(label="Select none")
+        c_none.connect("clicked", lambda *_: self._set_all(self.custom_checks, False))
+        custom_sel.pack_start(c_all, False, False, 0)
+        custom_sel.pack_start(c_none, False, False, 0)
+        col3.pack_start(custom_sel, False, False, 0)
+
+        cols_box.pack_start(col3, True, True, 0)
 
         start = Gtk.Button(label="Start Backup")
         start.get_style_context().add_class("suggested-action")
@@ -347,16 +482,14 @@ class BakupWindow(Gtk.Window):
         box.pack_start(start, False, False, 0)
         return box
 
-    def _make_flow(self, min_height: int = 180) -> tuple[Gtk.ScrolledWindow, Gtk.FlowBox]:
+    def _make_flow(self, min_height: int = 180, max_per_line: int = 3) -> tuple[Gtk.ScrolledWindow, Gtk.FlowBox]:
         scrolled = Gtk.ScrolledWindow()
         scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         scrolled.set_min_content_height(min_height)
         grid = Gtk.FlowBox()
         grid.set_selection_mode(Gtk.SelectionMode.NONE)
-        grid.set_max_children_per_line(3)
-        grid.set_homogeneous(False)
-        grid.set_column_spacing(4)
-        grid.set_row_spacing(2)
+        grid.set_max_children_per_line(max_per_line)
+        grid.set_min_children_per_line(1)
         scrolled.add(grid)
         return scrolled, grid
 
@@ -395,7 +528,7 @@ class BakupWindow(Gtk.Window):
         self.backup_checks.clear()
         self._label_rows.clear()
         for label in self.labels:
-            title = FRIENDLY.get(label, label)
+            title = get_friendly_name(label)
             row, cb = self._app_check_row(label, title, label, checked)
             self.backup_checks[label] = cb
             self._label_rows[label] = row
@@ -714,7 +847,7 @@ class BakupWindow(Gtk.Window):
                 [
                     parent_on,
                     self._label_icon_name(label),
-                    FRIENDLY.get(label, label),
+                    get_friendly_name(label),
                     "",
                     "",
                     "",
@@ -888,8 +1021,16 @@ class BakupWindow(Gtk.Window):
             if paths:
                 extra_selected.append({"id": app_id, "title": title, "paths": paths})
                 selected.append(app_id)
+        for app_id, cb in self.custom_checks.items():
+            if not cb.get_active():
+                continue
+            paths = getattr(cb, "_bakup_paths", None) or []
+            title = getattr(cb, "_bakup_title", app_id)
+            if paths:
+                extra_selected.append({"id": app_id, "title": title, "paths": paths})
+                selected.append(app_id)
         if not selected:
-            self._append_log("Select at least one label or discovered app.\n")
+            self._append_log("Select at least one label, discovered app, or custom backup.\n")
             return
         dest = self.backup_dest.get_text().strip() or DEFAULT_DEST
         cmd = [str(BACKUP_SH), "--dest", dest, "--labels", ",".join(selected)]
@@ -1028,6 +1169,310 @@ class BakupWindow(Gtk.Window):
         if self.notebook.get_current_page() == 1:
             self._refresh_snapshots()
         return False
+
+    # ------------------------------------------------------------ Custom Paths
+    def _load_custom_backups(self) -> list[dict]:
+        if not CUSTOM_CONFIG_PATH.parent.exists():
+            try:
+                CUSTOM_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                self._append_log(f"Failed to create config dir: {e}\n")
+        if CUSTOM_CONFIG_PATH.is_file():
+            try:
+                return json.loads(CUSTOM_CONFIG_PATH.read_text(encoding="utf-8"))
+            except Exception as e:
+                self._append_log(f"Error loading custom backups: {e}\n")
+        return []
+
+    def _save_custom_backups(self, items: list[dict]) -> None:
+        try:
+            CUSTOM_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            CUSTOM_CONFIG_PATH.write_text(json.dumps(items, indent=2), encoding="utf-8")
+        except Exception as e:
+            self._append_log(f"Error saving custom backups: {e}\n")
+
+    def _rebuild_custom_grid(self) -> None:
+        for child in list(self._custom_flow.get_children()):
+            self._custom_flow.remove(child)
+        self.custom_checks.clear()
+
+        custom_items = self._load_custom_backups()
+        if not custom_items:
+            lbl = Gtk.Label()
+            lbl.set_markup("<span color='gray'><i>No custom backups defined. Manage them in the Custom Paths tab.</i></span>")
+            self._custom_flow.add(lbl)
+            self._custom_flow.show_all()
+            return
+
+        for item in custom_items:
+            app_id = item["id"]
+            title = item["title"]
+            paths = item["paths"]
+            cb = Gtk.CheckButton(label=title)
+            cb.set_active(True)
+            cb._bakup_paths = paths
+            cb._bakup_title = title
+            self.custom_checks[app_id] = cb
+
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            row.pack_start(cb, True, True, 0)
+            tooltip = "Paths:\n" + "\n".join(paths)
+            row.set_tooltip_text(tooltip)
+
+            self._custom_flow.add(row)
+        self._custom_flow.show_all()
+
+    def _build_custom_paths_tab(self) -> Gtk.Widget:
+        main_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        main_box.set_border_width(8)
+
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        scrolled.set_hexpand(True)
+        scrolled.set_vexpand(True)
+
+        self.custom_store = Gtk.ListStore(int, str, str)
+        self.custom_tree = Gtk.TreeView(model=self.custom_store)
+        self.custom_tree.set_headers_visible(True)
+
+        r_title = Gtk.CellRendererText()
+        col_title = Gtk.TreeViewColumn("Name", r_title, text=1)
+        col_title.set_resizable(True)
+        col_title.set_expand(True)
+        self.custom_tree.append_column(col_title)
+
+        r_paths = Gtk.CellRendererText()
+        col_paths = Gtk.TreeViewColumn("Paths", r_paths, text=2)
+        col_paths.set_resizable(True)
+        col_paths.set_expand(True)
+        self.custom_tree.append_column(col_paths)
+
+        scrolled.add(self.custom_tree)
+        main_box.pack_start(scrolled, True, True, 0)
+
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+
+        add_btn = Gtk.Button(label="Add...")
+        add_btn.connect("clicked", self._on_add_custom_item)
+        btn_box.pack_start(add_btn, False, False, 0)
+
+        edit_btn = Gtk.Button(label="Edit...")
+        edit_btn.connect("clicked", self._on_edit_custom_item)
+        btn_box.pack_start(edit_btn, False, False, 0)
+
+        del_btn = Gtk.Button(label="Remove")
+        del_btn.connect("clicked", self._on_del_custom_item)
+        btn_box.pack_start(del_btn, False, False, 0)
+
+        main_box.pack_start(btn_box, False, False, 0)
+
+        self._refresh_custom_tree()
+        return main_box
+
+    def _refresh_custom_tree(self) -> None:
+        self.custom_store.clear()
+        items = self._load_custom_backups()
+        for idx, item in enumerate(items):
+            paths_str = ", ".join(item.get("paths", []))
+            self.custom_store.append([idx, item.get("title", ""), paths_str])
+
+    def _on_add_custom_item(self, _btn: Gtk.Button) -> None:
+        dialog = CustomBackupDialog(self, title="Add Custom Backup")
+        if dialog.run() == Gtk.ResponseType.OK:
+            title, paths = dialog.get_data()
+            if title and paths:
+                import re
+                slug = re.sub(r'[^a-z0-9]+', '-', title.strip().lower()).strip('-') or 'custom'
+                app_id = f"custom-{slug}"
+
+                items = self._load_custom_backups()
+                existing_ids = {item["id"] for item in items}
+                base_id = app_id
+                counter = 1
+                while app_id in existing_ids:
+                    app_id = f"{base_id}-{counter}"
+                    counter += 1
+
+                items.append({
+                    "id": app_id,
+                    "title": title,
+                    "paths": paths
+                })
+                self._save_custom_backups(items)
+                self._refresh_custom_tree()
+                self._rebuild_custom_grid()
+        dialog.destroy()
+
+    def _on_edit_custom_item(self, _btn: Gtk.Button) -> None:
+        selection = self.custom_tree.get_selection()
+        model, tree_iter = selection.get_selected()
+        if not tree_iter:
+            return
+        idx = model[tree_iter][0]
+        items = self._load_custom_backups()
+        if idx < 0 or idx >= len(items):
+            return
+        item_data = items[idx]
+
+        dialog = CustomBackupDialog(self, title="Edit Custom Backup", item_data=item_data)
+        if dialog.run() == Gtk.ResponseType.OK:
+            title, paths = dialog.get_data()
+            if title and paths:
+                item_data["title"] = title
+                item_data["paths"] = paths
+                self._save_custom_backups(items)
+                self._refresh_custom_tree()
+                self._rebuild_custom_grid()
+        dialog.destroy()
+
+    def _on_del_custom_item(self, _btn: Gtk.Button) -> None:
+        selection = self.custom_tree.get_selection()
+        model, tree_iter = selection.get_selected()
+        if not tree_iter:
+            return
+        idx = model[tree_iter][0]
+        items = self._load_custom_backups()
+        if idx < 0 or idx >= len(items):
+            return
+
+        confirm = Gtk.MessageDialog(
+            transient_for=self,
+            flags=0,
+            message_type=Gtk.MessageType.QUESTION,
+            buttons=Gtk.ButtonsType.YES_NO,
+            text=f"Are you sure you want to remove the custom backup '{items[idx]['title']}'?"
+        )
+        if confirm.run() == Gtk.ResponseType.YES:
+            items.pop(idx)
+            self._save_custom_backups(items)
+            self._refresh_custom_tree()
+            self._rebuild_custom_grid()
+        confirm.destroy()
+
+
+# Custom Dialog for adding/editing Custom Backup Units
+class CustomBackupDialog(Gtk.Dialog):
+    def __init__(self, parent, title="Custom Backup Item", item_data=None):
+        super().__init__(
+            title=title,
+            transient_for=parent,
+            flags=0
+        )
+        self.add_buttons(
+            Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
+            Gtk.STOCK_SAVE, Gtk.ResponseType.OK
+        )
+        self.set_default_size(500, 400)
+        self.set_border_width(8)
+
+        # Get content area
+        content = self.get_content_area()
+        content.set_spacing(10)
+
+        # Label & Entry for Title
+        title_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        title_box.pack_start(Gtk.Label(label="Name:", xalign=0), False, False, 0)
+        self.title_entry = Gtk.Entry()
+        self.title_entry.set_hexpand(True)
+        if item_data:
+            self.title_entry.set_text(item_data.get("title", ""))
+        title_box.pack_start(self.title_entry, True, True, 0)
+        content.pack_start(title_box, False, False, 0)
+
+        content.pack_start(Gtk.Label(label="Paths to backup (files or folders):", xalign=0), False, False, 0)
+
+        # Paths TreeView
+        path_scrolled = Gtk.ScrolledWindow()
+        path_scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        path_scrolled.set_vexpand(True)
+
+        self.path_store = Gtk.ListStore(str)
+        self.path_tree = Gtk.TreeView(model=self.path_store)
+        self.path_tree.set_headers_visible(False)
+
+        cell = Gtk.CellRendererText()
+        col = Gtk.TreeViewColumn("Path", cell, text=0)
+        self.path_tree.append_column(col)
+
+        path_scrolled.add(self.path_tree)
+
+        # Horizontal layout for paths + buttons
+        paths_layout = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        paths_layout.pack_start(path_scrolled, True, True, 0)
+
+        # Path buttons
+        p_btn_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+
+        add_file_btn = Gtk.Button(label="Add File...")
+        add_file_btn.connect("clicked", self._on_add_file)
+        p_btn_box.pack_start(add_file_btn, False, False, 0)
+
+        add_folder_btn = Gtk.Button(label="Add Folder...")
+        add_folder_btn.connect("clicked", self._on_add_folder)
+        p_btn_box.pack_start(add_folder_btn, False, False, 0)
+
+        remove_path_btn = Gtk.Button(label="Remove")
+        remove_path_btn.connect("clicked", self._on_remove_path)
+        p_btn_box.pack_start(remove_path_btn, False, False, 0)
+
+        paths_layout.pack_start(p_btn_box, False, False, 0)
+        content.pack_start(paths_layout, True, True, 0)
+
+        # Populate if editing
+        if item_data:
+            for p in item_data.get("paths", []):
+                self.path_store.append([p])
+
+        self.show_all()
+
+    def _on_add_file(self, _btn):
+        dialog = Gtk.FileChooserDialog(
+            title="Select File",
+            parent=self,
+            action=Gtk.FileChooserAction.OPEN
+        )
+        dialog.add_buttons(
+            Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
+            Gtk.STOCK_OPEN, Gtk.ResponseType.OK
+        )
+        dialog.set_default_size(600, 450)
+        dialog.set_current_folder(str(Path.home()))
+        if dialog.run() == Gtk.ResponseType.OK:
+            path = dialog.get_filename()
+            if path:
+                self.path_store.append([path])
+        dialog.destroy()
+
+    def _on_add_folder(self, _btn):
+        dialog = Gtk.FileChooserDialog(
+            title="Select Folder",
+            parent=self,
+            action=Gtk.FileChooserAction.SELECT_FOLDER
+        )
+        dialog.add_buttons(
+            Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
+            Gtk.STOCK_OPEN, Gtk.ResponseType.OK
+        )
+        dialog.set_default_size(600, 450)
+        dialog.set_current_folder(str(Path.home()))
+        if dialog.run() == Gtk.ResponseType.OK:
+            path = dialog.get_filename()
+            if path:
+                self.path_store.append([path])
+        dialog.destroy()
+
+    def _on_remove_path(self, _btn):
+        selection = self.path_tree.get_selection()
+        model, tree_iter = selection.get_selected()
+        if tree_iter:
+            model.remove(tree_iter)
+
+    def get_data(self) -> tuple[str, list[str]]:
+        title = self.title_entry.get_text().strip()
+        paths = []
+        for row in self.path_store:
+            paths.append(row[0])
+        return title, paths
 
 
 def main() -> int:
